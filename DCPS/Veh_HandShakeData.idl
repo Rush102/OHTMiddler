@@ -1,0 +1,692 @@
+/*
+ *                         OpenSplice DDS
+ *
+ *   This software and documentation are Copyright 2006 to 2017 PrismTech
+ *   Limited and its licensees. All rights reserved. See file:
+ *
+ *                     $OSPL_HOME/LICENSE
+ *
+ *   for full copyright notice and license terms.
+ *
+ */
+
+/************************************************************************
+ * LOGICAL_NAME:    Chat.idl
+ * FUNCTION:        OpenSplice Tutorial example code.
+ ************************************************************************
+ *
+ * This file contains the data definitions for the tutorial examples.
+ *
+ ***/
+
+module Veh_HandShakeData 
+{
+
+    const long MAX_NAME = 32;
+    typedef string<MAX_NAME> nameType;
+
+	enum Status{OK,NG,TimeOut};
+
+	enum OnOff{OFF,ON};
+
+	//enum SendDataStatus{No,Yes};
+
+	//enum ReceiveDataStatus{No,Yes};
+	enum PauseStatus{PauseNo,PauseYes};
+	
+	enum StopStatus{StopNo,StopYes};
+	
+	enum StopStatusForEvent{
+		StopStatus_NotDefinedYet,
+		StopStatus_NotApplicable,
+		StopStatus_InsideBannedWalk_EMS,
+		StopStatus_InsideBannedWalk_Stop,
+		StopStatus_InsideWalkable_EMS,
+		StopStatus_InsideWalkable_Stop,
+		StopStatus_Manual_EMS,
+		StopStatus_Manual_Stop,
+		StopStatus_Manual_Pause,
+		StopStatus_HwGuard_Stop,
+		StopStatus_LiDAR,
+		StopStatus_BlockCtrl_Zone,
+		StopStatus_HIDCtrl_Zone,
+		StopStatus_BlockCtrl_Section,
+		StopStatus_HIDCtrl_Section,
+		StopStatus_ReserveCtrl_Section,								
+		StopStatus_External_Pause,
+		StopStatus_External_CancelAbort
+	};
+
+	enum OperationMode{Auto,Manual};
+
+	enum CommandMode{Disabled,Enabled};
+
+	enum ReplyCode{No,Yes};
+
+	//enum Address1RespCode{OK,NG};
+
+	//enum Address2RespCode{OK,NG};
+
+	//enum Address3RespCode{OK,NG};
+	
+	enum LocationType{Arrived,Passed};
+
+	enum MoveType{single,cycle };
+
+	enum VehCompleteFlag{Unfinished,Finished};
+
+	enum LockUnLock{Locked,UnLocked};
+
+	enum RequestType{Cancel,Abort};
+
+	enum RequestPauseType{Released,Paused};
+
+	enum VehPowerStatus{OFF,ON};
+
+	enum VehLoadedStatus{NotExisted,Existed};
+
+	enum VehObstacleStopStatus{NonStop,Stop};
+
+	enum VehBlockStopStatus{NonStop,Stop};
+
+	enum VehHIDStopStatus{ NonStop, Stop };
+
+	enum VehPauseStatus{NonStop,Stop};
+
+	enum VehLeftGuideLockStatus{UnLocked,Locked};
+
+	enum VehRightGuideLockStatus{UnLocked,Locked};
+
+	enum VehCompleteCode{Normal,Abnormal}; 
+	
+	enum VehControlMode{
+		OnlineRemote,
+		OnlineLocal,
+		Offline
+	};
+	
+	enum VehWheelSteeringAngle{
+		Zero,
+		RightNinety,
+		LeftNinety
+	};
+	
+	enum CmdType{
+		NotDefinedYet,
+		CmdToMove, 
+		CmdToLoad,
+		CmdToUnload,
+		CmdToBlockSectionQueryResult,
+		CmdToHIDSectionQueryResult,
+		CmdToReserveSectionQueryResult,								
+		CmdToStop,
+		CmdToPause,
+		CmdToContinue,
+		CmdToRestart,
+		CmdToCancel,
+		CmdToAbort,
+		CmdToOverride,
+		CmdToAvoid,	 
+		CmdToMaintenance,
+		CmdForChangeStatus
+	};
+
+	enum VehCompleteStatus{
+		CmpAsNormal,
+		CmpAsCancel,
+		CmpAsAbort,
+		CmpAsOverride
+	};
+
+	enum VehEventTypes{
+		NotDefinedYet,
+		Load_Arrived,
+        Load_Start,
+		Load_Pick,
+        Load_Complete,
+        Unload_Arrived,
+        Unload_Start,
+		Unload_Place,
+        Unload_Complete,
+        Address_Arrival,
+        Address_Pass,
+        Moving_Pause,
+        Moving_Restart,
+        BlockSection_Query,
+        HIDSection_Query,
+		BlockNHidSection_Query,
+		PostBlockSectionExit,
+		PostHIDSectionExit,
+		PostBlockNHidSectionExit,
+        Moving_Complete,
+		ReserveSection_Query,
+		BatteryReport
+	};
+
+	enum ActionTypes{
+		NotDefinedYet,
+		ActToMove,
+		ActToLoad,
+		ActToUnload,
+		ActToLoad_Unload,
+		ActToHome_Calbration_Point,
+		ActToContinue,
+		ActToCycle,
+		ActToOverride,
+		ActToAvoid,
+		ActToAbort,
+		ActToCancel	 
+	};
+
+	enum VehModeStatus{
+		ModeAsStop,
+		ModeAsStarting,
+		ModeAsManual,
+		ModeAsAuto_Moving,
+		ModeAsAuto,
+		ModeAsHome_Calibration_Point,
+		ModeAsTeaching
+	};
+
+	enum VehActionStatus{
+		ActAsStopping,
+		ActAsMoving,
+		ActAsLoad,
+		ActAsUnLoad,
+		ActAsHoming,
+		ActAsTeach,
+		ActAsGripper_Teaching,
+		ActAsCycle_Run
+	};
+
+    struct MotionInfo_Client {
+
+        long      vehID;          // owner of message
+        string    vehName;           
+		long	NO;
+        long	En_TYPE;
+		long	CUR_ADR;
+		long	CUR_SEC;
+		long	IS_CARRY;
+		long	IS_OBST;
+		long	IS_BLOCK;
+		long	IS_HID;
+		long	IS_PAUSE;
+		long	IS_LGUIDE;
+		long	IS_RGUIDE;
+		long	SEC_DISTANCE;
+		long	BLOCK_SEC;
+		long	HID_SEC;
+		long	ACT_TYPE;
+		long	RPLY_CODE;
+    };
+#pragma keylist MotionInfo_Client vehID
+
+	struct MotionInfo_Server {
+        long      vehID;          // owner of message
+        string    vehName;           
+		long	NO;
+		long	ACT_TYPE;
+		string	FROM_ADR_ID;
+		string	TO_ADR_ID;
+        string	CAST_ID;
+		long	RPLY_CODE;
+    };
+#pragma keylist MotionInfo_Server vehID
+
+	struct MotionInfo_Vehicle_Comm {
+			long vehID;
+			string vehName;
+			double front_wheel_torque;
+			double rear_wheel_torque;
+			double front_wheel_speed;
+			double rear_wheel_speed;
+			double front_wheel_acc;
+			double front_wheel_dec;
+			double rear_wheel_acc;
+			double rear_wheel_dec;
+			double front_wheel_dist;
+			double rear_wheel_dist;
+			double ave_dist;
+			double ave_speed;
+			double ave_torque;
+			double ave_acc;
+			double ave_dec;
+			double current_pos;
+			double target_speed;
+			double max_speed;
+			double min_spedd;
+			boolean right_guide_up;
+			boolean left_guide_up;
+			boolean right_guide_down;
+			boolean left_guide_down;
+			boolean right_guide_detection;
+			boolean left_guide_detection;
+			boolean long_range_obst;
+			boolean short_range_obst;
+			boolean mid_range_obst;
+			string current_address;
+			string from_address;
+			string to_address;
+			string current_stage;
+			string from_stage;
+			string to_stage;
+			string port_address;
+			string barcode_read_address;
+
+
+
+		};
+#pragma keylist MotionInfo_Vehicle_Comm vehID
+
+	struct MotionInfo_Move{
+		MoveType eMoveType;
+		string Address;
+		string Stage;
+		sequence<string> GuidingSections;
+		sequence<string> GuidingAddresses;
+		long ForLoading;
+		long ForUnLoading;
+		long ForMaintain;
+	};
+
+	struct MotionInfo_Load{
+		string MCS_CSTID;
+		string MCS_CST2ID;
+		string Veh_CSTID;
+		string Veh_CST2ID;
+		long VerPort_OK;
+		long VerPort_NG;
+		long VerCST_OK;
+		long VerCST_NG;
+		long VerCST2_OK;
+		long VerCST2_NG;
+		long With_CST;
+		long Without_CST;
+		long With_CST2;
+		long Without_CST2;
+		VehLoadedStatus LoadStatus;
+	};
+
+	struct MotionInfo_UnLoad{
+		string MCS_CSTID;
+		string MCS_CST2ID;
+		string Veh_CSTID;
+		string Veh_CST2ID;
+		long VerPort_OK;
+		long VerPort_NG;
+		long VerCST_OK;
+		long VerCST_NG;
+		long VerCST2_OK;
+		long VerCST2_NG;
+		long With_CST;
+		long Without_CST;
+		long With_CST2;
+		long Without_CST2;
+		VehLoadedStatus LoadStatus;
+	};
+
+	struct MotionInfo_BlockSectionPassReply{
+		string Section;
+		Status BlockSectionPassReply;
+	};
+
+	struct MotionInfo_HIDSectionPassReply{
+		string Section;
+		Status HIDSectionPassReply;
+	};
+	struct MotionInfo_ReserveSectionPassReply{
+		sequence<string> SectionList;
+		Status ReserveSectionPassReply;
+    };
+	struct MotionInfo_BlockSectionPassReqst{
+		string Section;
+		Status BlockSectionPassReqst;
+	};
+
+	struct MotionInfo_HIDSectionPassReqst{
+		string Section;
+		Status HIDSectionPassReqst;
+	};
+    struct MotionInfo_ReserveSectionPassReqst{
+	    sequence<string> SectionList;
+		Status ReserveSectionPassReqst;
+    };
+	struct VehCmdType{
+		CmdType eCmdType;
+	};
+
+	struct MotionInfo_Inter_Comm_SendData{
+		long vehID;
+		string vehName;
+		long cmd_Send;
+		long cmd_Receive;
+		long Proc_ON;
+		VehCmdType udtCmdType;
+		VehControlMode udtControlMode;
+		MotionInfo_Move udtMove;
+		MotionInfo_Load udtLoad;
+		MotionInfo_UnLoad udtUnLoad;
+		long isContinue;
+		long isStop;
+		long isPause;
+		boolean BlockControlTimeOut;
+		boolean HIDControlTimeOut;
+		boolean ReserveSectionTimeOut;
+		MotionInfo_ReserveSectionPassReply ReserveSectionPassReply;									
+		MotionInfo_BlockSectionPassReply BlockSectionPassReply;
+		MotionInfo_HIDSectionPassReply  HIDSectionPassReply;
+	};
+#pragma keylist MotionInfo_Inter_Comm_SendData vehID
+
+	struct MotionInfo_Vehicle_Inter_Comm_ReportData_134{
+		long vehID;
+		string vehName;
+		MotionInfo_Load loadStatus;
+		MotionInfo_UnLoad unLoadStatus;
+		MotionInfo_BlockSectionPassReqst BlockSectionPassReqst;
+		MotionInfo_HIDSectionPassReqst HIDSectionPassReqst;
+		MotionInfo_ReserveSectionPassReqst ReserveSectionPassReqst;
+	    VehWheelSteeringAngle WheelAngle;
+		VehControlMode ConrtolMode;
+		long WhichType;
+		long LocationType;
+		string Section;
+		string Address;
+		string Stage;
+		double DistanceFromSectionStart;
+		double WalkLength;
+		double PowerConsume;
+		long Guiding;
+		string ReserveSection;						
+		string BlockControlSection;
+		string HIDControlSection;
+		long Proc_ON;
+		long cmd_Send;
+		long cmd_Receive;
+		long cmpCode;
+		long cmpStatus;
+		long stopStatusForEvent;
+		long vehModeStatus;
+		long vehActionStatus;
+		long eventTypes;
+		long actionType;
+		long vehLeftGuideLockStatus;
+		long vehRightGuideLockStatus;
+		long vehPauseStatus;
+		long vehBlockStopStatus;
+		long vehReserveStopStatus;					 
+		long vehHIDStopStatus;
+		long vehObstacleStopStatus;
+		long vehBlockSectionPassReqst;
+		long vehHIDSectionPassReqst;
+		long vehReserveSectionPassReqst;							  
+		long locationTypes;
+		long vehLoadStatus;
+		long vehObstDist;
+		long vehPowerStatus;
+		long ChargeStatus;
+		long BatteryCapacity;
+		long BatteryTemperature;   	
+		long ErrorCode;
+		long ErrorStatus;
+	};
+#pragma keylist MotionInfo_Vehicle_Inter_Comm_ReportData_134 vehID
+
+	struct MotionInfo_Vehicle_Inter_Comm_ReportData{
+		long vehID;
+		string vehName;
+		MotionInfo_Load loadStatus;
+		MotionInfo_UnLoad unLoadStatus;
+		MotionInfo_BlockSectionPassReqst BlockSectionPassReqst;
+		MotionInfo_HIDSectionPassReqst HIDSectionPassReqst;
+		MotionInfo_ReserveSectionPassReqst ReserveSectionPassReqst;
+	    VehWheelSteeringAngle WheelAngle;
+		VehControlMode ConrtolMode;
+		long WhichType;
+		long LocationType;
+		string Section;
+		string Address;
+		string Stage;
+		double DistanceFromSectionStart;
+		double WalkLength;
+		double PowerConsume;
+		long Guiding;
+		string ReserveSection;						
+		string BlockControlSection;
+		string HIDControlSection;
+		long Proc_ON;
+		long cmd_Send;
+		long cmd_Receive;
+		long cmpCode;
+		long cmpStatus;
+		long stopStatusForEvent;
+		long vehModeStatus;
+		long vehActionStatus;
+		long eventTypes;
+		long actionType;
+		long vehLeftGuideLockStatus;
+		long vehRightGuideLockStatus;
+		long vehPauseStatus;
+		long vehBlockStopStatus;
+		long vehReserveStopStatus;					 
+		long vehHIDStopStatus;
+		long vehObstacleStopStatus;
+		long vehBlockSectionPassReqst;
+		long vehHIDSectionPassReqst;
+		long vehReserveSectionPassReqst;							  
+		long locationTypes;
+		long vehLoadStatus;
+		long vehObstDist;
+		long vehPowerStatus;
+		long ChargeStatus;
+		long BatteryCapacity;
+		long BatteryTemperature;   	
+		long ErrorCode;
+		long ErrorStatus;
+	};
+#pragma keylist MotionInfo_Vehicle_Inter_Comm_ReportData vehID
+
+	struct MotionInfo_HandShake_SendData{
+		long vehID;
+		string vehName;
+		long cmdSend;
+		long cmdReceive;
+	};
+#pragma keylist MotionInfo_HandShake_SendData vehID
+
+	struct MotionInfo_HandShake_RecieveData{
+		long vehID;
+		string vehName;
+		long cmdSend;
+		long cmdReceive;
+
+	};
+#pragma keylist MotionInfo_HandShake_RecieveData vehID
+
+	struct Between_Vehicle_Data{
+		string Vehicle_ID;
+		boolean InService;
+		boolean EQ_Online;
+		boolean EQ_Error;
+		boolean IsMoving;
+		boolean IsHoisting;
+		string Current_Zone_ID;
+		string Current_Zone_ID2;
+		string Current_Zone_ID3;
+		string Current_Section_ID;
+		long Current_Section_Offset;
+		double Current_Map_HeadingPose_Angle;
+		long Current_Map_AbsPos_X;
+        long Current_Map_AbsPos_Y;
+		string Current_Address_ID;
+		string Current_Stage_ID;
+		string BlockQry_Zone_ID_1;
+		string BlockQry_Zone_ID_2;
+		string BlockQry_Zone_ID_3;
+		string BlockQry_Zone_ID_4;
+		string BlockQry_Zone_ID_5;
+		string BlockQry_Zone_ID_6;
+		string BlockQry_Zone_ID_7;
+		string BlockQry_Zone_ID_8;
+		string BlockQry_Zone_ID_9;
+		string Blocking_Zone_Owner;
+		string Blocking_Zone_ID;
+		long Blocking_ZoneEntry_Distance;
+		sequence<string> UniqueSections_FromNow2JustB4QryBlockZoneExit;
+		sequence<string> UniqueSections_FromNow2JustB4QryBlockZoneExit_OnlyExtraSplit;
+		sequence<string> UniqueSections_FromNow2JustB4QryBlockZoneExit_OnlyExtraMerge;
+		sequence<string> UniqueSections_FromNow2JustB4QryBlockZoneExit_OnlyExtraNearby;
+		sequence<string> UniqueSections_FromNow2JustB4QryBlockZoneExit_OnlyExtraTwoWay;
+		long Status1;
+		long Status2;
+		string Start_Time;
+		string Software_Version;
+		string Updating_Timestamp;
+	};
+#pragma keylist Between_Vehicle_Data Vehicle_ID
+
+	enum PortOwnerType{
+		NotDefinedYet,
+		Equipment,
+		Stocker,
+		MaintainLifter,
+		OverHeadBuffer,
+		HidControlBox,
+		ChargeDock,
+		Others
+	};
+
+
+	struct LoadPort_PIO_FromVehicle{
+		string EQ_Name;
+		string Port_Name;
+		string PIO_ID;
+		long PIO_Channel;
+		PortOwnerType PortType;
+		boolean InService;
+		boolean DO01_VALID;
+		boolean DO02_CS_0;
+		boolean DO03_CS_1;
+		boolean DO04_nil;
+		boolean DO05_TR_REQ;
+		boolean DO06_BUSY;
+		boolean DO07_COMPT;
+		boolean DO08_CONT;
+		boolean SELECT;
+	};
+#pragma keylist LoadPort_PIO_FromVehicle Port_Name
+
+
+	struct LoadPort_PIO_ToVehicle{
+		string EQ_Name;
+		string Port_Name;
+		string PIO_ID;
+		long PIO_Channel;
+		PortOwnerType PortType;
+		boolean InService;
+		boolean DI01_L_REQ;
+		boolean DI02_U_REQ;
+		boolean DI03_nil;
+		boolean DI04_READY;
+		boolean DI05_nil;
+		boolean DI06_nil;
+		boolean DI07_HO_AVBL;
+		boolean DI08_ES;
+		boolean READY_GO;
+		boolean Tray_Detection;
+	};
+#pragma keylist LoadPort_PIO_ToVehicle Port_Name
+
+
+	struct EQ_Stages_Interface_IO{
+		string EQ_Name;
+		PortOwnerType PortType;
+		boolean InService;
+		boolean EQ_Online;
+		boolean EQ_Error;
+		string ST01_Port_Name;
+		long ST01_Stage_ID;
+		boolean ST01_Ready;
+		boolean ST01_Loaded;
+		string ST02_Port_Name;
+		long ST02_Stage_ID;
+		boolean ST02_Ready;
+		boolean ST02_Loaded;
+		string ST03_Port_Name;
+		long ST03_Stage_ID;
+		boolean ST03_Ready;
+		boolean ST03_Loaded;
+		string ST04_Port_Name;
+		long ST04_Stage_ID;
+		boolean ST04_Ready;
+		boolean ST04_Loaded;
+		string ST05_Port_Name;
+		long ST05_Stage_ID;
+		boolean ST05_Ready;
+		boolean ST05_Loaded;
+		string ST06_Port_Name;
+		long ST06_Stage_ID;
+		boolean ST06_Ready;
+		boolean ST06_Loaded;
+		string ST07_Port_Name;
+		long ST07_Stage_ID;
+		boolean ST07_Ready;
+		boolean ST07_Loaded;
+		string ST08_Port_Name;
+		long ST08_Stage_ID;
+		boolean ST08_Ready;
+		boolean ST08_Loaded;
+		string ST09_Port_Name;
+		long ST09_Stage_ID;
+		boolean ST09_Ready;
+		boolean ST09_Loaded;
+		string ST10_Port_Name;
+		long ST10_Stage_ID;
+		boolean ST10_Ready;
+		boolean ST10_Loaded;
+		string ST11_Port_Name;
+		long ST11_Stage_ID;
+		boolean ST11_Ready;
+		boolean ST11_Loaded;
+		string ST12_Port_Name;
+		long ST12_Stage_ID;
+		boolean ST12_Ready;
+		boolean ST12_Loaded;
+		string ST13_Port_Name;
+		long ST13_Stage_ID;
+		boolean ST13_Ready;
+		boolean ST13_Loaded;
+		string ST14_Port_Name;
+		long ST14_Stage_ID;
+		boolean ST14_Ready;
+		boolean ST14_Loaded;
+		string ST15_Port_Name;
+		long ST15_Stage_ID;
+		boolean ST15_Ready;
+		boolean ST15_Loaded;
+		string ST16_Port_Name;
+		long ST16_Stage_ID;
+		boolean ST16_Ready;
+		boolean ST16_Loaded;
+	};
+#pragma keylist EQ_Stages_Interface_IO EQ_Name
+
+
+	struct InterVehicles_BlockZones_Control{
+		string BlockZoneID;
+		string HasLockedBy_VehID;
+		string RequestUnlockingBy_VehID;
+		string HasUnlockedBy_VehID;
+		string HasAcquiredBy_VehID;
+		string Locking_Timestamp;
+		string RequestUnlocking_Timestamp;
+		string Unlocking_Timestamp;
+		string Acquiring_Timestamp;
+		string ServerHeartbeating_Timestamp;
+		string SeverInstanceID;
+		boolean InService;
+	};
+#pragma keylist InterVehicles_BlockZones_Control BlockZoneID
+
+};

@@ -1,0 +1,75 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using DDS;
+using DDS.OpenSplice;
+using OHT_HandShakeData;
+
+namespace OHT_HandShakeData
+{
+    public static class DDS_Global
+    {
+        public static DomainParticipantFactory dpf;
+        public static string ownerID;
+        public static MotionInfo_ClientDataWriter motionInfo_ClientWriter; 
+        public static MotionInfo_ClientDataReader motionInfo_ClientReader;
+        public static MotionInfo_ServerDataWriter motionInfo_ServerWriter;
+        public static MotionInfo_ServerDataReader motionInfo_ServerReader;
+        public static MotionInfo_Vehicle_CommDataReader motionInfo_VehCommReader;
+        public static MotionInfo_Vehicle_CommDataWriter motionInfo_VehCommWriter;
+        public static MotionInfo_Inter_Comm_SendDataDataReader motionInfo_VehInterCommSendDataReader;
+        public static MotionInfo_Inter_Comm_SendDataDataWriter motionInfo_VehInterCommSendDataWriter;
+        public static MotionInfo_Vehicle_Inter_Comm_ReportDataDataReader motionInfo_VehInterCommReptDataReader;
+        public static MotionInfo_Vehicle_Inter_Comm_ReportDataDataWriter motionInfo_VehInterCommReptDataWriter;
+        public static MotionInfo_HandShake_SendDataDataReader motionInfo_HandShakeSendDataReader;
+        public static MotionInfo_HandShake_SendDataDataWriter motionInfo_HandShakeSendDataWriter;
+        public static MotionInfo_HandShake_RecieveDataDataReader motionInfo_HandShakeRecieveDataReader;
+        public static MotionInfo_HandShake_RecieveDataDataWriter motionInfo_HandShakeRecieveDataWriter;
+        public static InstanceHandle userInstance;
+        public static DDS.InstanceHandle vehCommDataInst;
+        public static DDS.InstanceHandle vehInterCommSendDataInst;
+        public static DDS.InstanceHandle vehInterCommReptDataInst;
+        public static DDS.InstanceHandle vehHandShakeSendDataInst;
+        public static DDS.InstanceHandle vehHandShakeRxDataInst;
+
+        //++++++++++++++++++++++++++++++++++++++++++                    // Roy+171204
+        public static DDS.InstanceHandle vehClientDataInst;
+        public static DDS.InstanceHandle vehServerDataInst;
+
+        //public static List<Dictionary<string, DDS.InstanceHandle>> lstdctVehServerDataInst;                   // Roy-+180125
+        public static Dictionary<string, DDS.InstanceHandle> dctVehServerDataInst;                   // Roy+180125
+
+        public static MotionInfo_Client motionInfoClientData;
+        public static MotionInfo_Server motionInfoServerData;
+        //++++++++++++++++++++++++++++++++++++++++++
+
+        public static MotionInfo_Vehicle_Comm motionInfoCommData;
+        public static MotionInfo_Inter_Comm_SendData motionInfoInterCommSendData;
+        public static MotionInfo_Vehicle_Inter_Comm_ReportData motionInfoInterCommReptData;
+        public static MotionInfo_HandShake_RecieveData motionInfoHandShakeRxData;
+        public static MotionInfo_HandShake_SendData motionInfoHandShakeTxData;
+        //
+        public static IQueryCondition singleUser;
+        public static IReadCondition newUser;
+        public static IStatusCondition leftUser;
+        public static GuardCondition escape;
+        //
+        public static WaitSet userLoadWS;
+        public static ICondition[] guardList;
+        public static SampleInfo[] nsInfo_UserLoad;
+        //
+        public static bool blClient=false;
+        public static bool blServer=false;
+        public  const string clientPartitionName = "Client";
+        public  const string serverPartionName = "Server";
+        //
+        public static string segment_name;
+        public static int segment_length;
+        public static int current_pos;
+        public const int segMaxCount = 100;
+        public const int secMaxCount = 100;
+
+
+    }
+}

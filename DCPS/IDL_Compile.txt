@@ -1,0 +1,3 @@
+cd $(ProjectDir)
+PATH=%PATH%;$(OSPL_HOME)\bin;$(OSPL_HOME)\lib
+"$(OSPL_HOME)\bin\idlpp" -I "$(OSPL_HOME)\etc\idl" -l cs OHT_HandShakeData.idl

@@ -1,0 +1,866 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
+using OHT_HandShakeData;
+using com.mirle.iibg3k0.ttc.Common;
+using com.mirle.iibg3k0.ttc.Common.TCPIP;
+using OHTC_Vehicle_Communication;
+using TcpIpClientSample;
+
+namespace OHTC_Vehicle_Communication.StatusMachine
+{
+
+
+    public class Veh_OHTC_Comm_Data
+    {
+
+        //public event EventHandler eventCmd31_CycleRun;
+        public event EventHandler<ReportMsgEventArg> eventMsgFromOHTC;
+        Stopwatch sw = new Stopwatch();
+        long time = 0, timeOut = 10000;
+        bool blTimeOut = false;
+        public TcpIpAgent clientAgent { get; private set; }
+        int[] needCheckSeqNoIfPacketID = new int[]
+        {
+            WrapperMessage.TransReqFieldNumber,
+        };
+
+
+        //public readonly bool TcpIpTimeOut { get { return blTimeOut; } }                           // Roy-171128
+        public bool TcpIpTimeOut { get { return blTimeOut; } }                           // Roy+171128
+
+        public Veh_OHTC_Comm_Data()
+        {
+            if (!Veh_OHTC_Global.OffLineTest)
+            {
+                CreatTcpIpClientAgent();                                                 //Create the tcp/ip client agent.
+                registeredEvent();                                                       //Add the connect/disconnect situation and message.
+                clientAgent.injectDecoder
+                    (new com.mirle.iibg3k0.ttc.Common.TCPIP.DecodRawData.DecodeRawData_Google(unPackWrapperMsg));                    //用來注入解開封包的Function
+                //clientAgent.setNeedToBeConfirmReceivePacketID(needCheckSeqNoIfPacketID); //設定哪些的"ID"，是需要檢查Seq No
+                Task.Run(() => clientAgent.clientConnection());
+            }
+            blTimeOut = false;
+        }
+
+        public Veh_OHTC_Comm_Data(long time)
+        {
+            this.timeOut = time;
+            this.blTimeOut = false;
+        }
+
+        public void str31_Receive(object sender, TcpIpEventArgs e)
+        {
+            if (!clientAgent.IsConnection)
+            {
+                return;
+            }
+            // In this region, these should be copy & paste on every receive;
+            ID_31_TRANS_REQUEST recive_str = (ID_31_TRANS_REQUEST)e.objPacket;
+            ID_131_TRANS_RESPONSE send_str = null;
+
+            Veh_OHTC_Global.enCmdID = Veh_OHTC_Global.CmdID.cmd31;
+            //
+            string cmd_id = recive_str.CmdID;
+            ActiveType actionType = recive_str.ActType;
+
+            string fromAdr = recive_str.LoadAdr;
+            string toAdr = recive_str.ToAdr;
+            string CST_ID = recive_str.CSTID;
+            string[] passSections = recive_str.GuideSections.ToArray();
+            string[] cycRunSecs = recive_str.CycleSections.ToArray();
+            string[] passSegment = recive_str.GuideSegments.ToArray();
+
+            string reason = string.Empty;
+            bool canReceiveCmd = true;
+            Veh_OHTC_Global.GuideSections = passSections;
+            Veh_OHTC_Global.CycleSections = cycRunSecs;
+            Veh_OHTC_Global.VehActiveType = actionType;
+
+            //Preparing the packet content 131 for sending to OHC
+            send_str = new ID_131_TRANS_RESPONSE
+            {
+                CmdID = cmd_id,
+                ActType = actionType,
+                ReplyCode = canReceiveCmd ? 0 : 1,
+                NgReason = reason
+            };
+
+            WrapperMessage wrapper = new WrapperMessage
+            {
+                ID = WrapperMessage.TransRespFieldNumber,
+                SeqNum = e.iSeqNum,
+                TransResp = send_str
+            };
+
+            Boolean resp_cmp = clientAgent.TrxTcpIp.SendGoogleMsg(wrapper, true);
+            //vehicle.currentExcuteCMD_ID = cmd_id;
+
+
+            Console.WriteLine("Received");
+
+
+            // Initialize the Packet Content
+            //DDS_Global.motionInfoInterCommSendData.Move.Sections = passSections;
+            //DDS_Global.motionInfoInterCommSendData.Load.CSTID = int.Parse(CST_ID);
+            string msg = string.Empty;
+            Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enTransferRequest;
+
+
+            #region "解碼/翻譯給OHT"
+            switch (actionType)
+            {
+                case ActiveType.Move:
+                    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = false;
+                    //SpinWait.SpinUntil(() => false, 20);
+                    Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.Move;
+                    //DDS_Global.motionInfoInterCommSendData.Move.Address = toAdr;              // Roy-180319
+                    DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = MoveType.single;              // Roy*180328
+
+                    DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToMove;              // Roy*180328
+
+                    Veh_OHTC_Global.Address = toAdr;               // Roy+180319
+                    Veh_OHTC_Global.GuideSections = passSections;               // Roy+180319
+
+                    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = true;
+
+                    GetMsgString(fromAdr, toAdr, CST_ID, ref msg);
+                    OnEventMsgFromOHTC(new ReportMsgEventArg(msg));
+                    break;
+
+                //case ActiveType.Continue:     //jason-- 180829
+                //    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = false;
+                //    Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.Continue;
+                //    //DDS_Global.motionInfoInterCommSendData.Move.Address = toAdr;              // Roy-180319
+                //    DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = MoveType.single;                    // Roy?180302 ... 也有可能是在 Cycle-Run 中 ...               // Roy*180328
+
+                //    //Veh_OHTC_Global.VehActiveType = ActiveType.Continue;                 // Roy-180302 ... 前方已(共用)設定過
+
+                //    DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToContinue;                 // Roy+180302
+
+                //    Veh_OHTC_Global.Address = toAdr;               // Roy+180319
+                //    Veh_OHTC_Global.GuideSections = passSections;               // Roy+180319
+
+                //    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = true;
+
+                //    GetMsgString(fromAdr, toAdr, CST_ID, ref msg);
+                //    OnEventMsgFromOHTC(new ReportMsgEventArg(msg));
+                //    break;
+
+                case ActiveType.Loadunload:
+                    //Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.Load_Unload;
+                    //DDS_Global.motionInfoInterCommSendData.Move.Type = (int)MoveType.single;
+                    //DDS_Global.motionInfoInterCommSendData.CmdType.cmdType = CmdType.Load;
+                    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = false;
+                    //SpinWait.SpinUntil(() => false, 50);
+                    Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.Move;
+
+                    //DDS_Global.motionInfoInterCommSendData.Move.Address = fromAdr;              // Roy-180319
+
+                    DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = MoveType.single;              // Roy*180328
+
+                    DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToMove;              // Roy*180328
+
+                    Veh_OHTC_Global.LoadAddress = fromAdr;              // Roy+180319
+                    Veh_OHTC_Global.UnloadAddress = toAdr;              // Roy+180319
+                    Veh_OHTC_Global.GuideSections = passSections;               // Roy+180319
+                    Veh_OHTC_Global.GuideSections2nd = passSections;               // Roy+180319                // need to split sections by myself ... ? 
+                    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = true;
+
+                    GetMsgString(fromAdr, toAdr, CST_ID, ref msg);
+                    OnEventMsgFromOHTC(new ReportMsgEventArg(msg));
+                    //SpinWait.SpinUntil(() => false, 50);
+                    //
+                    break;
+
+                case ActiveType.Load:
+                    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = false;
+                    Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.Load;
+                    //DDS_Global.motionInfoInterCommSendData.Move.Address = fromAdr;              // Roy-180319
+                    DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = MoveType.single;              // Roy*180328
+
+                    DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToLoad;
+
+                    //Veh_OHTC_Global.fromAddress_LoadPort = fromAdr;              // Roy-180319
+                    //Veh_OHTC_Global.toAddress_UnloadPort = toAdr;              // Roy-180319
+                    Veh_OHTC_Global.LoadAddress = fromAdr;              // Roy+180319
+                    Veh_OHTC_Global.GuideSections = passSections;               // Roy+180319
+
+                    DDS_Global.motionInfoInterCommSendData.udtLoad.CSTID = CST_ID;                 // Roy*180319
+                    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = true;
+
+                    //// 
+                    break;
+
+                case ActiveType.Unload:
+                    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = false;
+                    Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.UnLoad;
+                    //DDS_Global.motionInfoInterCommSendData.Move.Address = toAdr;              // Roy-180319
+                    DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = MoveType.single;              // Roy*180328
+
+                    DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToUnload;
+
+                    Veh_OHTC_Global.UnloadAddress = toAdr;              // Roy+180319
+                    Veh_OHTC_Global.GuideSections = passSections;               // Roy+180319
+
+                    DDS_Global.motionInfoInterCommSendData.udtUnLoad.CSTID = CST_ID;                 // Roy*180319
+                    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = true;
+
+                    //// 
+                    break;
+
+                case ActiveType.Round:
+                    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = false;
+
+                    //Veh_OHTC_Global.VehActiveType = ActiveType.Round;                 // Roy-180302 ... 前方已(共用)設定過
+
+                    Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.Cycle;
+                    //DDS_Global.motionInfoInterCommSendData.Move.Address = toAdr;              // Roy-180319
+                    DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = MoveType.cycle;
+
+                    DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToMove;
+
+                    Veh_OHTC_Global.Address = toAdr;               // Roy+180319
+                    Veh_OHTC_Global.GuideSections = passSections;               // Roy+180319
+                    Veh_OHTC_Global.CycleSections = cycRunSecs;               // Roy+180319
+
+                    //DDS_Global.motionInfoInterCommSendData.Move.Sections = Veh_OHTC_Global.GuideSections;              // Roy-180319
+                    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = true;
+
+                    GetMsgString(fromAdr, toAdr, CST_ID, ref msg);
+                    OnEventMsgFromOHTC(new ReportMsgEventArg(msg));
+                    break;
+            }
+            #endregion         // "解碼/翻譯給OHT"
+
+        }
+        public void str32_Receive(object sender, TcpIpEventArgs e)
+        {
+            //This part didn't need, due to the first send is 132;
+        }
+
+        public void str33_Receive(object sender, TcpIpEventArgs e)
+        {
+            ID_33_CONTROL_ZONE_REPUEST_CANCEL_REQUEST recive_str = (ID_33_CONTROL_ZONE_REPUEST_CANCEL_REQUEST)e.objPacket;
+            ID_133_CONTROL_ZONE_REPUEST_CANCEL_RESPONSE send_str = null;
+
+            Veh_OHTC_Global.enCmdID = Veh_OHTC_Global.CmdID.cmd33;
+        }
+
+        public void str36_Receive(object sender, TcpIpEventArgs e)
+        {
+            ID_36_TRANS_EVENT_RESPONSE recive_str = (ID_36_TRANS_EVENT_RESPONSE)e.objPacket;
+            ID_136_TRANS_EVENT_REP send_str = null;
+
+            Veh_OHTC_Global.enCmdID = Veh_OHTC_Global.CmdID.cmd36;
+        }
+        public void str37_Receive(object sender, TcpIpEventArgs e)
+        {
+            ID_33_CONTROL_ZONE_REPUEST_CANCEL_REQUEST recive_str = (ID_33_CONTROL_ZONE_REPUEST_CANCEL_REQUEST)e.objPacket;
+            ID_133_CONTROL_ZONE_REPUEST_CANCEL_RESPONSE send_str = null;
+
+            Veh_OHTC_Global.enCmdID = Veh_OHTC_Global.CmdID.cmd33;
+        }   
+        public void str39_Receive(object sender, TcpIpEventArgs e)
+        {
+            ID_39_PAUSE_REQUEST recive_str = (ID_39_PAUSE_REQUEST)e.objPacket;
+            ID_139_PAUSE_RESPONSE send_str = null;
+
+            Veh_OHTC_Global.enCmdID = Veh_OHTC_Global.CmdID.cmd39;
+
+            //PauseEvent eType = PauseEvent.Pause;                  // Roy-180302 ... 不可用(死)定值
+            PauseEvent eType = recive_str.EventType;                // Roy+180302 ... 撈OHTC命令內容
+
+            send_str = new ID_139_PAUSE_RESPONSE
+            {
+                EventType = eType,
+                ReplyCode = 0
+            };
+
+            WrapperMessage wrapper = new WrapperMessage
+            {
+                //ID = WrapperMessage.TransRespFieldNumber,                  // Roy-180302
+                ID = WrapperMessage.PauseRespFieldNumber,                  // Roy+180302
+                SeqNum = e.iSeqNum,
+                PauseResp = send_str                  // Roy+180302
+            };
+
+            Boolean resp_cmp = clientAgent.TrxTcpIp.SendGoogleMsg(wrapper, true);
+
+            Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = false;
+            Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enEventsOnDriving;
+            Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = true;
+        }
+        public void str41_Recieve(object sender, TcpIpEventArgs e)
+        {
+            ID_41_MODE_CHANGE_REQ recive_str = (ID_41_MODE_CHANGE_REQ)e.objPacket;
+            ID_141_MODE_CHANGE_RESPONSE send_str = null;
+
+            Veh_OHTC_Global.enCmdID = Veh_OHTC_Global.CmdID.cmd39;
+        }
+        public void str43_Receive(object sender, TcpIpEventArgs e)
+        {
+            ID_43_STATUS_REQUEST recive_str = (ID_43_STATUS_REQUEST)e.objPacket;
+            ID_143_STATUS_RESPONSE send_str = null;
+
+            Veh_OHTC_Global.enCmdID = Veh_OHTC_Global.CmdID.cmd39;
+        }
+        public void str44_Receive(object sender, TcpIpEventArgs e)
+        {
+            ID_44_STATUS_CHANGE_RESPONSE recive_str = (ID_44_STATUS_CHANGE_RESPONSE)e.objPacket;
+            ID_144_STATUS_CHANGE_REP send_str = null;
+        }
+        public void str45_Receive(object sender, TcpIpEventArgs e)
+        {
+            ID_45_POWER_OPE_REQ recive_str = (ID_45_POWER_OPE_REQ)e.objPacket;
+            ID_145_POWER_OPE_RESPONSE send_str = null;
+        }
+        public void str71_Receive(object sender, TcpIpEventArgs e)
+        {
+            ID_71_RANGE_TEACHING_REQUEST recive_str = (ID_71_RANGE_TEACHING_REQUEST)e.objPacket;
+            ID_171_RANGE_TEACHING_RESPONSE send_str = null;
+        }
+        public void str72_Receive(object sender, TcpIpEventArgs e)
+        {
+            ID_72_RANGE_TEACHING_COMPLETE_RESPONSE recive_str = (ID_72_RANGE_TEACHING_COMPLETE_RESPONSE)e.objPacket;
+            ID_172_RANGE_TEACHING_COMPLETE_REPORT send_str = null;
+        }
+        public void str74_Receive(object sender, TcpIpEventArgs e)
+        {
+            ID_74_ADDRESS_TEACH_RESPONSE recive_str = (ID_74_ADDRESS_TEACH_RESPONSE)e.objPacket;
+            ID_174_ADDRESS_TEACH_REPORT send_str = null;
+        }
+        public void str91_Receive(object sender, TcpIpEventArgs e)
+        {
+            ID_91_ALARM_RESET_REQUEST recive_str = (ID_91_ALARM_RESET_REQUEST)e.objPacket;
+            ID_191_ALARM_RESET_RESPONSE send_str = null;
+        }
+        public void str94_Receive(object sender, TcpIpEventArgs e)
+        {
+            ID_94_ALARM_RESPONSE recive_str = (ID_94_ALARM_RESPONSE)e.objPacket;
+            ID_194_ALARM_REPORT send_str = null;
+        }
+
+        public bool sned_Str132(string cmdID, ActiveType actType, string cstID, int cmpCode, CompleteStatus cmpStatus)
+        {
+            string rtnMsg = string.Empty;
+
+            ID_132_TRANS_COMPLETE_REPORT stSend;
+            ID_32_TRANS_COMPLETE_RESPONSE stRecv;
+
+            stSend = new ID_132_TRANS_COMPLETE_REPORT()
+            {
+                CmdID = cmdID,
+                //ActType = actType,    //jason-- 180829
+                CSTID = cstID,
+                CmpCode = cmpCode,
+                CmpStatus = cmpStatus
+            };
+
+            WrapperMessage wrapper = new WrapperMessage
+            {
+                ID = WrapperMessage.TransEventRepFieldNumber,
+                TranCmpRep = stSend
+            };
+
+            sw.Start();
+
+            com.mirle.iibg3k0.ttc.Common.TrxTcpIp.ReturnCode result = clientAgent.TrxTcpIp.sendRecv_Google(wrapper, out stRecv, out rtnMsg);
+
+            sw.Stop();
+
+            time = sw.ElapsedMilliseconds;
+
+            sw.Reset();
+
+            if (time < timeOut)
+            {
+                blTimeOut = false;
+                return result == TrxTcpIp.ReturnCode.Normal;
+            }
+            else
+            {
+                blTimeOut = true;
+                Console.WriteLine("#{0}# TCP/IP Comm: TimeOut", DateTime.Now.ToString("HH:mm:ss.fff"));
+                return result == TrxTcpIp.ReturnCode.Timeout;
+            }
+
+
+        }
+
+        public bool sned_Str134(string cmdID, EventType eventType, string section, string address, string blockSec,
+            VhGuideStatus leftGuide, VhGuideStatus rightGuide, VhStopSingle blockStatus, VhStopSingle pauseStatus,
+            VhStopSingle obstStatus, VhLoadCSTStatus loadStatus, double sec_dist = 0)
+        {
+            string rtnMsg = string.Empty;
+
+            ID_134_TRANS_EVENT_REP stSend;
+            //ID_34_TRANS_EVENT_RESPONSE stRecv;        //jason-- 180829
+
+            stSend = new ID_134_TRANS_EVENT_REP()
+            {
+                EventType = eventType,
+                CurrentAdrID = address,
+                CurrentSecID = section,
+                HasCST = loadStatus,
+                //ObstacleStatus = obstStatus,    //?
+                //PauseStatus = pauseStatus,  //?               //jason-- 180829
+                LeftGuideLockStatus = leftGuide,
+                RightGuideLockStatus = rightGuide,
+                SecDistance = (uint)sec_dist,
+                //CtrDistance = 0,    //?
+                //ObstDistance = 0,   //?
+                //RequestBlockID = blockSec   //?
+            };
+
+            WrapperMessage wrapper = new WrapperMessage
+            {
+                ID = WrapperMessage.TransEventRepFieldNumber,
+                TransEventRep = stSend
+            };
+
+            sw.Start();
+
+            //com.mirle.iibg3k0.ttc.Common.TrxTcpIp.ReturnCode result = clientAgent.TrxTcpIp.sendRecv_Google(wrapper, out stRecv, out rtnMsg); //jason-- 180830
+
+            // Waiting for reply
+            sw.Stop();
+
+            time = sw.ElapsedMilliseconds;
+
+            if (time > timeOut)
+            {
+                blTimeOut = true;
+                sw.Reset();
+                Console.WriteLine("#{0}#TCP/IP Comm: Time Out", DateTime.Now.ToString("HH:mm:ss.fff"));                   // Roy+180308
+                //return result == TrxTcpIp.ReturnCode.Timeout;     //jason-- 180830
+                return true;    //jason++ 180830
+            }
+            else
+            {
+                blTimeOut = false;
+                sw.Reset();
+                //jason-- 180830
+                //if (stRecv.IsBlockPass == 1)
+                //{
+                //    Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enTransferRequest;
+                //    Veh_OHTC_Global.enCmdID = Veh_OHTC_Global.CmdID.cmd134;             // cmd32;                   // Roy?180308 ... shoulf be 'cmd134'
+                //    Veh_OHTC_Global.eventTypes = (int)VehEventTypes.BlockSection_Query;                     // Roy*180319
+                //    Veh_OHTC_Global.vehBlockPassReply = (int)Status.NG;                   // Roy?180308
+                //    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = true;
+                //}
+                //else
+                {
+                    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = false;
+                    Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enTransferRequest;
+                    //Veh_OHTC_Global.enCmdID = Veh_OHTC_Global.CmdID.cmd134;             // cmd32;                   // Roy?180308 ... shoulf be 'cmd134'
+                    Veh_OHTC_Global.eventTypes = (int)VehEventTypes.BlockSection_Query;                     // Roy*180319
+                    Veh_OHTC_Global.vehBlockPassReply = (int)Status.OK;                   // Roy?180308
+                    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = true;
+                }
+            }
+
+            //return result == TrxTcpIp.ReturnCode.Normal;  //jason-- 180830
+            return true; //jason++ 180830
+        }
+
+        public bool sned_Str144(string cmdID, string currAdr, string currSec, VHModeStatus mStatus, VHActionStatus aStatus,
+                        VhPowerStatus powerStatus, VhLoadCSTStatus lStatus, VhStopSingle oStatus,
+                        VhStopSingle bStatus, VhStopSingle pauseStatus, VhGuideStatus leftGuide,
+                        VhGuideStatus rightGuide, int sec_Dist)
+        {
+            string rtnMsg = string.Empty;
+
+            ID_144_STATUS_CHANGE_REP stSend;
+            ID_44_STATUS_CHANGE_RESPONSE stRecv;
+
+            try
+            {
+                stSend = new ID_144_STATUS_CHANGE_REP
+                {
+                    CurrentAdrID = currAdr,
+                    CurrentSecID = currSec,
+                    ModeStatus = mStatus,
+                    ActionStatus = aStatus,
+                    PowerStatus = powerStatus,
+                    //HasCST = lStatus, //jason-- 180830
+                    ObstacleStatus = oStatus,
+                    BlockingStatus = bStatus,
+                    PauseStatus = pauseStatus,
+                    //LeftGuideLockStatus = leftGuide,  //jason-- 180830
+                    //RightGuideLockStatus = rightGuide,    //jason-- 180830
+                    //SecDistance = sec_Dist    //jason-- 180830
+                };
+
+                WrapperMessage wrapper = new WrapperMessage
+                {
+                    ID = WrapperMessage.StatueChangeRepFieldNumber,
+                    StatueChangeRep = stSend
+                };
+
+                sw.Start();
+
+                com.mirle.iibg3k0.ttc.Common.TrxTcpIp.ReturnCode result =
+                    clientAgent.TrxTcpIp.sendRecv_Google(wrapper, out stRecv, out rtnMsg);
+
+                sw.Stop();
+
+                time = sw.ElapsedMilliseconds;
+
+                if (time < timeOut)
+                {
+                    sw.Reset();
+                    blTimeOut = false;
+
+                    if (stRecv.ReplyCode == 0)
+                        return result == TrxTcpIp.ReturnCode.Normal;
+                    else
+                        return result == TrxTcpIp.ReturnCode.DataCheckFail;
+                }
+                else
+                {
+                    sw.Reset();
+                    blTimeOut = true;
+                    Console.WriteLine("#{0}#TCP/IP Comm: Time Out", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    return result == TrxTcpIp.ReturnCode.Timeout;                   // DataCheckFail;                   // Roy*180308
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return false;
+            }
+        }
+
+
+
+        private void CreatTcpIpClientAgent()
+        {
+            //180723
+            int clientNum = 1;
+            string clientName = "OHT01";
+            string sRemoteIP = "192.168.7.77";
+            string sRemotePort = "10001";
+            string sLocalIP = "192.168.7.147";
+            string sLocalPort = "5002";
+            int iRemotePort = int.Parse(sRemotePort);
+            int iLocalPort = int.Parse(sLocalPort);
+
+            int recv_timeout_ms = (int)timeOut;           //等待sendRecv Reply的Time out時間(milliseconds)
+            int send_timeout_ms = 0;               //暫時無用
+            int max_readSize = 0;                  //暫時無用
+            int reconnection_interval_ms = 10000;  //斷線多久之後再進行一次嘗試恢復連線的動作
+            int max_reconnection_count = 10;       //斷線後最多嘗試幾次重新恢復連線 (若設定為0則不進行自動重新連線)
+            int retry_count = 2;                   //SendRecv Time out後要再重複發送的次數
+
+            clientAgent = new TcpIpAgent(clientNum, clientName,
+                sLocalIP, iLocalPort, sRemoteIP, iRemotePort,
+                TcpIpAgent.TCPIP_AGENT_COMM_MODE.CLINET_MODE
+                  , recv_timeout_ms, send_timeout_ms, max_readSize, reconnection_interval_ms,
+                  max_reconnection_count, retry_count, AppConstants.FrameBuilderType.PC_TYPE_MIRLE);
+        }
+
+        /// <summary>
+        /// 註冊要監聽的事件
+        /// </summary>
+        void registeredEvent()
+        {
+            // Add Event Handlers for all the recieved messages
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.TransReqFieldNumber, str31_Receive);
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.TranCmpRespFieldNumber, str32_Receive);
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.ControlZoneReqFieldNumber, str33_Receive);
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.ImpTransEventRespFieldNumber, str36_Receive);
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.TransCancelReqFieldNumber, str37_Receive);
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.PauseReqFieldNumber, str39_Receive);
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.ModeChangeReqFieldNumber, str41_Recieve);
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.StatusReqFieldNumber, str43_Receive);
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.StatusChangeRespFieldNumber, str44_Receive);
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.PowerOpeReqFieldNumber, str45_Receive);
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.RangeTeachingReqFieldNumber, str71_Receive);
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.RangeTeachingCmpRespFieldNumber, str72_Receive);
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.AddressTeachRespFieldNumber, str74_Receive);
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.AlarmResetReqFieldNumber, str91_Receive);
+            clientAgent.addTcpIpReceivedHandler(WrapperMessage.AlarmRespFieldNumber, str94_Receive);
+            //
+            //Here need to be careful for the TCPIP
+            //
+
+            clientAgent.addTcpIpConnectedHandler(Connection);       //連線時的通知
+            clientAgent.addTcpIpDisconnectedHandler(Disconnection); //斷線時的通知
+        }
+
+        protected void Connection(object sender, TcpIpEventArgs e)
+        {
+            TcpIpAgent agent = sender as TcpIpAgent;
+            Console.WriteLine("Vh ID:{0}, connection.", agent.Name);
+        }
+
+        protected void Disconnection(object sender, TcpIpEventArgs e)
+        {
+            TcpIpAgent agent = sender as TcpIpAgent;
+            Console.WriteLine("Vh ID:{0}, disconnection.", agent.Name);
+        }
+        #region 需要注入的解封包使用的Function
+        public static Google.Protobuf.IMessage unPackWrapperMsg(byte[] raw_data)
+        {
+            WrapperMessage WarpperMsg = ToObject<WrapperMessage>(raw_data);
+            return WarpperMsg;
+        }
+
+        public static T ToObject<T>(byte[] buf) where T : Google.Protobuf.IMessage<T>, new()
+        {
+            if (buf == null)
+                return default(T);
+
+            Google.Protobuf.MessageParser<T> parser = new Google.Protobuf.MessageParser<T>(() => new T());
+            return parser.ParseFrom(buf);
+        }
+        #endregion 需要注入的解封包使用的Function
+        protected void OnEventMsgFromOHTC(ReportMsgEventArg e)
+        {
+            if (eventMsgFromOHTC != null)
+            {
+                eventMsgFromOHTC(this, e);
+            }
+        }
+
+        protected void GetMsgString(string fromAdr, string toAdr, string CST_ID, ref string msg)
+        {
+            string sGuide = string.Empty, sCycle = string.Empty;
+            if (Veh_OHTC_Global.GuideSections != null)
+            {
+                foreach (string str in Veh_OHTC_Global.GuideSections)
+                {
+                    sGuide = sGuide + str + "_";
+                }
+            }
+            if (Veh_OHTC_Global.CycleSections != null)
+            {
+                foreach (string str in Veh_OHTC_Global.CycleSections)
+                {
+                    sCycle = sCycle + str + "_";
+                }
+            }
+            msg = string.Format(@"Cmd_ID: {0},
+                            Active Type: {1},
+                            From Address: {2},
+                            To Address: {3},
+                            Guide Sections:{4},
+                            Cycle Sections:{5},
+                            CST_ID: {6}",
+                            Veh_OHTC_Global.enCmdID, Veh_OHTC_Global.VehActiveType.ToString(),
+                            fromAdr, toAdr, sGuide, sCycle, CST_ID.ToString());
+        }
+    }
+
+
+    public class Cmd31EventArg : EventArgs
+    {
+        public Cmd31EventArg()
+        {
+
+        }
+    }
+
+
+    public class VHMSGIF
+    {
+        public const int LEN_MESSAGE_SIZE = 100;
+        public const int LEN_ITEM_CSTID = 16;
+        public const int LEN_ITEM_DATETIME = 14;
+        public const int LEN_ITEM_TESTDATA = 8;
+        //public const int LEN_ITEM_PASSSEGMENT = 4;
+        public const int LEN_ITEM_PASSSEGMENT = 6;
+
+        public const ushort ITEM_RESPCODE_OK = 0;
+        public const ushort ITEM_RESPCODE_NG = 1;
+
+        public const ushort ITEM_MULTIFLAG_LAST = 0;
+        public const ushort ITEM_MULTIFLAG_CONT = 1;
+
+        // Controller -> Vehicle Packet ID = [1 - 99]
+        // Vehicle -> Controller Packet ID = [101 - 199]
+        public const int ID_NONE = 0;
+        public const int ID_HOST_KISO_VERSION_REPORT = 1;
+        public const int ID_HOST_KISO_VERSION_RESPONSE = 101;
+
+        public const int ID_VHCL_KISO_VERSION_REPORT = 102;
+        public const int ID_VHCL_KISO_VERSION_RESPONSE = 2;
+
+        public const int ID_KISO_LIST_COUNT_REPORT = 11;
+        public const int ID_KISO_LIST_COUNT_RESPONSE = 111;
+
+        public const int ID_KISO_TRAVEL_REPORT = 13;
+        public const int ID_KISO_TRAVEL_RESPONSE = 113;
+
+        public const int ID_KISO_SECTION_REPORT = 15;
+        public const int ID_KISO_SECTION_RESPONSE = 115;
+
+        public const int ID_KISO_ADDRESS_REPORT = 17;
+        public const int ID_KISO_ADDRESS_RESPONSE = 117;
+
+        public const int ID_KISO_SCALE_REPORT = 19;
+        public const int ID_KISO_SCALE_RESPONSE = 119;
+
+        public const int ID_KISO_CONTROL_REPORT = 21;
+        public const int ID_KISO_CONTROL_RESPONSE = 121;
+
+        public const int ID_KISO_GUIDE_REPORT = 23;
+        public const int ID_KISO_GUIDE_RESPONSE = 123;
+
+        public const int ID_KISO_GRIPPER_REPORT = 25;
+        public const int ID_KISO_GRIPPER_RESPONSE = 125;
+
+        public const int ID_TRANS_REQUEST = 31;
+        public const int ID_TRANS_REQUEST_RESPONSE = 131;
+
+        public const int ID_TRANS_COMPLETE_REPORT = 132;
+        public const int ID_TRANS_COMPLETE_RESPONSE = 32;
+
+        public const int ID_TRANS_EVENT_REPORT = 134;
+        public const int ID_TRANS_EVENT_RESPONSE = 34;
+
+        public const int ID_TRANS_CHANGE_REQUEST = 35;
+        public const int ID_TRANS_CHANGE_RESPONSE = 135;
+
+        public const int ID_TRANS_CANCEL_REQUEST = 37;
+        public const int ID_TRANS_CANCEL_RESPONSE = 137;
+
+        public const int ID_PAUSE_REQUEST = 39;
+        public const int ID_PAUSE_RESPONSE = 139;
+
+        public const int ID_MODE_CHANGE_REQUEST = 41;
+        public const int ID_MODE_CHANGE_RESPONSE = 141;
+
+        public const int ID_STATUS_REQUEST = 43;
+        public const int ID_STATUS_RESPONSE = 143;
+
+        public const int ID_STATUS_CHANGE_REPORT = 144;
+        public const int ID_STATUS_CHANGE_RESPONSE = 44;
+
+        public const int ID_POWER_OPE_REQUEST = 45;
+        public const int ID_POWER_OPE_RESPONSE = 145;
+
+        public const int ID_INDIVIDUAL_DATA_UPLOAD_REQUEST = 61;
+        public const int ID_INDIVIDUAL_DATA_UPLOAD_REPORT = 161;
+
+        public const int ID_INDIVIDUAL_DATA_DOWNLOAD_REQUEST = 162;
+        public const int ID_INDIVIDUAL_DATA_DOWNLOAD_REPORT = 62;
+
+        public const int ID_INDIVIDUAL_DATA_CHANGE_REQUEST = 63;
+        public const int ID_INDIVIDUAL_DATA_CHANGE_RESPONSE = 163;
+
+        public const int ID_SECTION_TEACH_REQUEST = 71;
+        public const int ID_SECTION_TEACH_RESPONSE = 171;
+
+        public const int ID_SECTION_TEACH_COMPLETE_REPORT = 172;
+        public const int ID_SECTION_TEACH_COMPLETE_RESPONSE = 72;
+
+        public const int ID_ADDRESS_TEACH_REPORT = 174;
+        public const int ID_ADDRESS_TEACH_RESPONSE = 74;
+
+        public const int ID_ALARM_RESET_REQUEST = 91;
+        public const int ID_ALARM_RESET_RESPONSE = 191;
+
+        public const int ID_ALARM_REPORT = 194;
+        public const int ID_ALARM_RESPONSE = 94;
+
+        public const int ID_LOG_UPLOAD_REQUEST = 95;
+        public const int ID_LOG_UPLOAD_RESPONSE = 195;
+
+        public const int ID_LOG_DATA_REPORT = 196;
+        public const int ID_LOG_DATA_RESPONSE = 96;
+
+        public const int ID_VHCL_COMM_TEST_REQUEST = 198;
+        public const int ID_VHCL_COMM_TEST_REPORT = 98;
+
+        public const int ID_HOST_COMM_TEST_REQUEST = 99;
+        public const int ID_HOST_COMM_TEST_REPORT = 199;
+
+        public static string[] ID_NAMES;
+
+        public static void PrcInitializeIDNames()
+        {
+            string sWk = "";
+
+            ID_NAMES = new string[256];
+
+            for (int ii = 0; ii < ID_NAMES.Length; ii++)
+            {
+                switch (ii)
+                {
+                    case ID_HOST_KISO_VERSION_REPORT: sWk = "[  1]Host Version Rep."; break;
+                    case ID_HOST_KISO_VERSION_RESPONSE: sWk = "[101]Host Version Resp."; break;
+                    case ID_VHCL_KISO_VERSION_REPORT: sWk = "[102]Vehicle Version Rep."; break;
+                    case ID_VHCL_KISO_VERSION_RESPONSE: sWk = "[  2]Vehicle Version Resp."; break;
+                    case ID_KISO_LIST_COUNT_REPORT: sWk = "[ 11]Kiso ListCount Rep."; break;
+                    case ID_KISO_LIST_COUNT_RESPONSE: sWk = "[111]Kiso ListCount Resp."; break;
+                    case ID_KISO_TRAVEL_REPORT: sWk = "[ 13]Kiso Travel Rep."; break;
+                    case ID_KISO_TRAVEL_RESPONSE: sWk = "[113]Kiso Travel Resp."; break;
+                    case ID_KISO_SECTION_REPORT: sWk = "[ 15]Kiso Section Rep."; break;
+                    case ID_KISO_SECTION_RESPONSE: sWk = "[115]Kiso Section Resp."; break;
+                    case ID_KISO_ADDRESS_REPORT: sWk = "[ 17]Kiso Address Rep."; break;
+                    case ID_KISO_ADDRESS_RESPONSE: sWk = "[117]Kiso Address Resp."; break;
+                    case ID_KISO_SCALE_REPORT: sWk = "[ 19]Kiso Scale Rep."; break;
+                    case ID_KISO_SCALE_RESPONSE: sWk = "[119]Kiso Scale Resp."; break;
+                    case ID_KISO_CONTROL_REPORT: sWk = "[ 21]Kiso Control Rep."; break;
+                    case ID_KISO_CONTROL_RESPONSE: sWk = "[121]Kiso Control Resp."; break;
+                    case ID_KISO_GUIDE_REPORT: sWk = "[ 23]Kiso Guide Rep."; break;
+                    case ID_KISO_GUIDE_RESPONSE: sWk = "[123]Kiso Guide Resp."; break;
+                    case ID_TRANS_REQUEST: sWk = "[ 31]Trans Req."; break;
+                    case ID_TRANS_REQUEST_RESPONSE: sWk = "[131]Trans Resp."; break;
+                    case ID_TRANS_COMPLETE_REPORT: sWk = "[132]TransComp Rep."; break;
+                    case ID_TRANS_COMPLETE_RESPONSE: sWk = "[ 32]TransComp Resp."; break;
+                    case ID_TRANS_EVENT_REPORT: sWk = "[134]TransEvent Rep."; break;
+                    case ID_TRANS_EVENT_RESPONSE: sWk = "[ 34]TransEvent Resp."; break;
+                    case ID_TRANS_CHANGE_REQUEST: sWk = "[ 35]TransChange Req."; break;
+                    case ID_TRANS_CHANGE_RESPONSE: sWk = "[135]TransChange Resp."; break;
+                    case ID_TRANS_CANCEL_REQUEST: sWk = "[ 37]TransCancel Req."; break;
+                    case ID_TRANS_CANCEL_RESPONSE: sWk = "[137]TransCancel Resp."; break;
+                    case ID_PAUSE_REQUEST: sWk = "[ 39]Pause Req."; break;
+                    case ID_PAUSE_RESPONSE: sWk = "[139]Pause Resp."; break;
+                    case ID_MODE_CHANGE_REQUEST: sWk = "[ 41]ModeChange Req."; break;
+                    case ID_MODE_CHANGE_RESPONSE: sWk = "[141]ModeChange Resp."; break;
+                    case ID_STATUS_REQUEST: sWk = "[ 43]Status Req."; break;
+                    case ID_STATUS_RESPONSE: sWk = "[143]Status Resp."; break;
+                    case ID_STATUS_CHANGE_REPORT: sWk = "[144]StatusChange Rep."; break;
+                    case ID_STATUS_CHANGE_RESPONSE: sWk = "[ 44]StatusChange Resp."; break;
+                    case ID_POWER_OPE_REQUEST: sWk = "[ 45]PowerOpe Req."; break;
+                    case ID_POWER_OPE_RESPONSE: sWk = "[145]PowerOpe Resp."; break;
+                    case ID_INDIVIDUAL_DATA_UPLOAD_REQUEST: sWk = "[ 61]IndividualUp Req."; break;
+                    case ID_INDIVIDUAL_DATA_UPLOAD_REPORT: sWk = "[161]IndividualUp Rep."; break;
+                    case ID_INDIVIDUAL_DATA_DOWNLOAD_REQUEST: sWk = "[162]IndividualDown Req."; break;
+                    case ID_INDIVIDUAL_DATA_DOWNLOAD_REPORT: sWk = "[ 62]IndividualDown Rep."; break;
+                    case ID_INDIVIDUAL_DATA_CHANGE_REQUEST: sWk = "[ 63]IndividualChange Req."; break;
+                    case ID_INDIVIDUAL_DATA_CHANGE_RESPONSE: sWk = "[163]IndividualChange Resp."; break;
+                    case ID_SECTION_TEACH_REQUEST: sWk = "[ 71]SectionTeach Req."; break;
+                    case ID_SECTION_TEACH_RESPONSE: sWk = "[171]SectionTeach Resp."; break;
+                    case ID_SECTION_TEACH_COMPLETE_REPORT: sWk = "[172]SectionTeachComp Rep."; break;
+                    case ID_SECTION_TEACH_COMPLETE_RESPONSE: sWk = "[ 72]SectionTeachComp Resp."; break;
+                    case ID_ADDRESS_TEACH_REPORT: sWk = "[174]AddressTeach Rep."; break;
+                    case ID_ADDRESS_TEACH_RESPONSE: sWk = "[ 74]AddressTeach Resp."; break;
+                    case ID_ALARM_RESET_REQUEST: sWk = "[ 91]AlarmReset Req."; break;
+                    case ID_ALARM_RESET_RESPONSE: sWk = "[191]AlarmReset Resp."; break;
+                    case ID_ALARM_REPORT: sWk = "[194]Alarm Rep."; break;
+                    case ID_ALARM_RESPONSE: sWk = "[ 94]Alarm Resp."; break;
+                    case ID_LOG_UPLOAD_REQUEST: sWk = "[ 95]LogUpload Req."; break;
+                    case ID_LOG_UPLOAD_RESPONSE: sWk = "[195]LogUpload Resp."; break;
+                    case ID_LOG_DATA_REPORT: sWk = "[196]LogData Rep."; break;
+                    case ID_LOG_DATA_RESPONSE: sWk = "[ 96]LogData Resp."; break;
+                    case ID_VHCL_COMM_TEST_REQUEST: sWk = "[198]Vehicle CommTest Req."; break;
+                    case ID_VHCL_COMM_TEST_REPORT: sWk = "[ 98]Vehicle CommTest Resp."; break;
+                    case ID_HOST_COMM_TEST_REQUEST: sWk = "[ 99]Host CommTest Req."; break;
+                    case ID_HOST_COMM_TEST_REPORT: sWk = "[199]Host CommTest Resp."; break;
+                    default: sWk = "[   ]Not Defined"; break;
+                }
+                ID_NAMES[ii] = sWk.PadRight(32);
+            }
+        }
+
+    }
+
+}

@@ -1,0 +1,3184 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Timers;
+using System.Threading;
+using System.Threading.Tasks;
+using OHT_HandShakeData;
+using TcpIpClientSample;
+
+namespace OHTC_Vehicle_Communication.StatusMachine
+{
+    public class Veh_OHTC
+    {
+        static bool blRxDataSent = false;
+        static bool blSendDataReceived = false;
+        Task task;
+
+        //public event EventHandler<ReportMsgEventArg> eventMsgFromOHTC;
+        public event EventHandler<BlockControlQueryArg> eventBlockQuery;
+        public event EventHandler<ReportMsgEventArg> eventMsgToOHTC;
+        //
+        EventType eventTypes;
+        CompleteStatus cmpStatus;
+        ActiveType activeType;
+        VHActionStatus actionStatus;
+        VhGuideStatus lGuideStatus, rGuideStatus;
+        VhLoadCSTStatus loadStatus;
+        VHModeStatus modeStatus;
+        VhPowerStatus powerStatus;
+        VhStopSingle obstStatus, blockStatus, pauseStatus;
+        //
+        long time = 10000;
+        Veh_OHTC_Comm_Data vehTcpComm;
+        enum RxStatus { N0 = 0, Yes = 1 }
+        enum TxStatus { No = 0, Yes = 1 }
+        enum CmdID { cmd31 = 31, cmd131 = 131, cmd32 = 32, cmd132 = 132, cmd39 = 39, cmd139 = 139 }
+        enum VehJobDone { No = 0, Yes = 1 }
+        protected enum LoadCommand { UnLoad = 0, Load = 1 }
+
+        LoadCommand enLoad;
+        VehJobDone enJobDone;
+
+        System.Timers.Timer timerActionType = new System.Timers.Timer();
+        public System.Timers.Timer timerEventSquence = new System.Timers.Timer();                   // EventSquenceStatusMachine_Elapsed ...
+
+        static string prevAddress = string.Empty;
+        Veh_OHTC_Global.SequenceEvents seqEvents;
+
+        //MotionInfo_Vehicle_Comm[] motionInfoComm = null;
+        //DDS.SampleInfo[] sampleInfo = null;
+
+        MotionInfo_Vehicle_Inter_Comm_ReportData[] motionInfoInterCommReport = null;
+        DDS.SampleInfo[] sampleInfo_RptData = null;
+        MotionInfo_HandShake_RecieveData[] handShakeRxData = null;
+        DDS.SampleInfo[] sampleInfo_RxData = null;
+        MotionInfo_HandShake_SendData[] handShakeSendData = null;
+        DDS.SampleInfo[] sampleInfo_SendData = null;
+
+        public Veh_OHTC()
+        {
+
+            Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enIdle;
+            timerEventSquence.Interval = 100;
+            timerEventSquence.Elapsed += EventSquenceStatusMachine_Elapsed;
+            timerEventSquence.AutoReset = true;
+            timerEventSquence.Enabled = true;
+            Veh_OHTC_Global.mResetEvent = new ManualResetEvent(false);
+            vehTcpComm = new Veh_OHTC_Comm_Data(time);
+        }
+
+        //~Veh_OHTC()  //反建構子寫法
+        //{
+        //}
+
+        public void EventSquenceStatusMachine_Elapsed(object sender, ElapsedEventArgs e)
+        {
+
+            //DDS_Global.motionInfo_VehCommReader.Take(
+            //    ref motionInfoComm, ref sampleInfo,
+            //    DDS.SampleStateKind.Any, DDS.ViewStateKind.Any, DDS.InstanceStateKind.Any);
+
+            seqEvents = Veh_OHTC_Global.seqEvents;
+
+            switch (seqEvents)
+            {
+                case Veh_OHTC_Global.SequenceEvents.enIdle:
+                    Veh_OHTC_Global.vehOHTC.timerEventSquence.Enabled = false;                  //added wschen 20171124
+                    break;
+
+                case Veh_OHTC_Global.SequenceEvents.enVeh_PowerOn:
+                    // Work to do
+                    Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enIdle;
+                    break;
+
+                case Veh_OHTC_Global.SequenceEvents.enVeh_Data:
+                    // Work to do
+                    Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enIdle;
+                    break;
+
+                case Veh_OHTC_Global.SequenceEvents.enControl_Start_Stop:
+                    // Work to do
+                    Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enIdle;
+                    break;
+
+                case Veh_OHTC_Global.SequenceEvents.enTransferRequest:
+                    Veh_TransferRequest_Procedure(Veh_OHTC_Global.enCmdID);
+                    Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enIdle;
+                    break;
+
+                case Veh_OHTC_Global.SequenceEvents.enEventsOnDriving:
+                    Veh_EventsOnDriving_Procedure(Veh_OHTC_Global.enCmdID);
+                    Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enIdle;
+                    break;
+
+                case Veh_OHTC_Global.SequenceEvents.enTransferCancel:
+                    // Work to do
+                    Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enIdle;
+                    break;
+
+                case Veh_OHTC_Global.SequenceEvents.enChangeMode:
+                    // Work to do
+                    Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enIdle;
+                    break;
+
+                case Veh_OHTC_Global.SequenceEvents.enChangePower:
+                    // Work to do
+                    Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enIdle;
+                    break;
+
+                case Veh_OHTC_Global.SequenceEvents.enErrorOccur_Clear:
+                    // Work to do
+                    break;
+
+                case Veh_OHTC_Global.SequenceEvents.enAutoDrivingTeaching:
+                    // Work to do
+                    Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enIdle;
+                    break;
+
+                case Veh_OHTC_Global.SequenceEvents.enGripperTeaching:
+                    // Work to do
+                    Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enIdle;
+                    break;
+
+                case Veh_OHTC_Global.SequenceEvents.enVehLogUpLoad:
+                    // Work to do
+                    Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enIdle;
+                    break;
+
+                case Veh_OHTC_Global.SequenceEvents.enRecoverFromUnExpPowerFailure:
+                    // Work to do
+                    Veh_OHTC_Global.seqEvents = Veh_OHTC_Global.SequenceEvents.enIdle;
+                    break;
+
+            }
+
+        }
+
+
+        public void ActionTypeStatusMachine()
+        {
+
+            switch (Veh_OHTC_Global.enActionType)
+            {
+                case Veh_OHTC_Global.ActionType.Move:
+                    Console.WriteLine("\n#{0}# Begin 'Single-Move' To address.", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                    Veh_Move_Procedure(false, MoveType.single, Veh_OHTC_Global.GuideSections);
+                    Console.WriteLine("#{0}# 'Single-Move' To address Complete.\n", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    break;
+
+                case Veh_OHTC_Global.ActionType.Load_Unload:
+                    Console.WriteLine("\n#{0}# Begin 'Loading' Procedure", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                    Veh_LoadUnLoad_Procedure(LoadCommand.Load, MoveType.single, Veh_OHTC_Global.GuideSections, Veh_OHTC_Global.CSTID_Load.ToString());              // Roy*180308 ... temp. 
+                    Console.WriteLine("#{0}# 'Loading' Procedure Complete.\n", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+
+                    Console.WriteLine("\n#{0}# Begin 'UnLoading' Procedure", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                    Veh_LoadUnLoad_Procedure(LoadCommand.UnLoad, MoveType.single, Veh_OHTC_Global.GuideSections2nd, Veh_OHTC_Global.CSTID_UnLoad.ToString());              // Roy*180308 ... temp.              // Roy*180319
+                    Console.WriteLine("#{0}# 'UnLoading' Procedure Complete\n", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+
+                    Console.WriteLine("#{0}# 'Load-n-UnLoad' Procedure Complete\n", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                    break;
+
+                case Veh_OHTC_Global.ActionType.Load:
+                    Console.WriteLine("\n#{0}# Begin 'Loading' Procedure", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                    Veh_LoadUnLoad_Procedure(LoadCommand.Load, MoveType.single, Veh_OHTC_Global.GuideSections, Veh_OHTC_Global.CSTID_Load.ToString());              // Roy*180308 ... temp. 
+                    Console.WriteLine("#{0}# 'Loading' Procedure Complete\n", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    break;
+
+                case Veh_OHTC_Global.ActionType.UnLoad:
+                    Console.WriteLine("\n#{0}# Begin 'UnLoading' Procedure", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                    Veh_LoadUnLoad_Procedure(LoadCommand.UnLoad, MoveType.single, Veh_OHTC_Global.GuideSections, Veh_OHTC_Global.CSTID_UnLoad.ToString());              // Roy*180308 ... temp. 
+                    Console.WriteLine("#{0}# 'UnLoading' Procedure Complete\n", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    break;
+
+                //+++++++++++++++++++++++++++++++++++++++                   // Roy+180319
+                case Veh_OHTC_Global.ActionType.Cancel:
+                    Console.WriteLine("\n#{0}# Begin 'Cancel' Procedure", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    Veh_Cancel_Procedure();
+                    Console.WriteLine("#{0}# 'Cancel' Procedure Complete\n", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    break;
+
+                case Veh_OHTC_Global.ActionType.Abort:
+                    Console.WriteLine("\n#{0}# Begin 'Abort' Procedure", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    Veh_Abort_Procedure();
+                    Console.WriteLine("#{0}# 'Abort' Procedure Complete\n", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    break;
+                //+++++++++++++++++++++++++++++++++++++++
+
+                case Veh_OHTC_Global.ActionType.Continue:
+                    Console.WriteLine("\n#{0}# Begin 'Continue' Procedure", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                    Veh_Continue_Procedure();
+                    Console.WriteLine("#{0}# 'Continue' Procedure Complete\n", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    break;
+
+                case Veh_OHTC_Global.ActionType.Cycle:
+                    Console.WriteLine("\n\n#{0}# Begin 'Cycle-Run' Procedure", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                    enJobDone = VehJobDone.No;
+                    Veh_CycleRun_Procedure();
+                    Console.WriteLine("#{0}# 'Cycle-Run' Procedure Complete\n\n", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    break;
+
+                //+++++++++++++++++++++++++++++++++++++++                   // Roy+180319
+                case Veh_OHTC_Global.ActionType.Restart:
+                    Console.WriteLine("\n#{0}# Begin 'Restart' Procedure", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    Veh_Restart_Procedure();
+                    Console.WriteLine("#{0}# 'Restart' Procedure Complete\n", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    break;
+                //+++++++++++++++++++++++++++++++++++++++
+
+                case Veh_OHTC_Global.ActionType.Pause:
+                    //System.Diagnostics.Debug.Assert(false);             // Roy+171114                 // Roy-180302
+
+                    Console.WriteLine("\n#{0}# Begin 'Pause' Procedure", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                    Veh_Pause_Procedure();
+                    Console.WriteLine("#{0}# 'Pause' Procedure Complete\n", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    break;
+
+                case Veh_OHTC_Global.ActionType.Stop:
+                    Console.WriteLine("\n#{0}# Begin 'Stop' Procedure", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy+180302
+                    Veh_Stop_Procedure();               // Roy+180302
+                    Console.WriteLine("#{0}# 'Stop' Procedure Complete\n", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy+180302
+
+                    //enJobDone = VehJobDone.Yes;                 // Roy-+180308 ...打斷CycleRun內部迴圈用 ... 
+                    break;
+
+            }
+        }
+
+        protected bool Veh_PowerOn_Procedure()
+        {
+            try
+            {
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return false;
+            }
+        }
+
+
+        protected bool Veh_TransferRequest_Procedure(Veh_OHTC_Global.CmdID enCmdID)
+        {
+
+            try
+            {
+                switch (enCmdID)
+                {
+                    //++++++++++++++++++++++++++++                 // Roy+180302
+                    case Veh_OHTC_Global.CmdID.dark31:
+                        #region "dark31"
+                        //if (task == null && !task.IsCompleted)                  // ... ??? 
+                        //{
+                        task = Task.Run(() => ActionTypeStatusMachine());
+                        Console.WriteLine("#{0}# Stop Thread Started.", DateTime.Now.ToString("HH:mm:ss.fff"));
+                        //}
+                        #endregion          // "dark31"
+
+                        break;
+                    //++++++++++++++++++++++++++++
+
+                    case Veh_OHTC_Global.CmdID.cmd31:
+                        #region "cmd31"
+                        activeType = Veh_OHTC_Global.VehActiveType;
+
+                        switch (activeType)
+                        {
+                            //case ActiveType.Continue:   //jason-- 180829 here has no continue to use;
+                            //    if (task == null && !task.IsCompleted)                  // ... ??? 
+                            //    {
+                            //        task = Task.Run(() => ActionTypeStatusMachine());
+                            //        Console.WriteLine("#{0}# Continue Thread Started.", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy+180302
+                            //    }
+
+                            //    break;
+
+                            case ActiveType.Move:
+                                //++++++++++++++++++++++                  // Roy+180302
+                                if (Veh_OHTC_Global.enActionType == Veh_OHTC_Global.ActionType.Cycle)
+                                {
+                                    Veh_OHTC_Global.blCycleRun = true;
+                                }
+                                else
+                                {
+                                    //Veh_OHTC_Global.blCycleRun = false; 
+                                }
+                                //++++++++++++++++++++++
+
+                                Task.Run(() => ActionTypeStatusMachine());
+                                Console.WriteLine("#{0}# Move Thread Started.", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy+180302
+                                break;
+
+                            case ActiveType.Round:
+                                //++++++++++++++++++++++                  // Roy+180302
+                                if (Veh_OHTC_Global.enActionType != Veh_OHTC_Global.ActionType.Cycle)
+                                {
+                                    System.Diagnostics.Debug.Assert(false);
+                                }
+                                //++++++++++++++++++++++
+
+                                Veh_OHTC_Global.blCycleRun = true;                  // Roy+180302
+
+                                task = Task.Run(() => ActionTypeStatusMachine());
+                                Console.WriteLine("#{0}# Cycle Run Thread Started.", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                break;
+
+                            case ActiveType.Loadunload:
+                                task = Task.Run(() => ActionTypeStatusMachine());
+                                Console.WriteLine("#{0}# Load/UnLoad Thread Started.", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                break;
+
+                            //++++++++++++++++++++++++++++++                    // Roy+180302
+                            case ActiveType.Load:
+                                task = Task.Run(() => ActionTypeStatusMachine());
+                                Console.WriteLine("#{0}# Load Thread Started.", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                break;
+
+                            case ActiveType.Unload:
+                                task = Task.Run(() => ActionTypeStatusMachine());
+                                Console.WriteLine("#{0}# UnLoad Thread Started.", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                break;
+                            //++++++++++++++++++++++++++++++
+
+                        }
+                        #endregion          // "cmd31"
+
+                        break;
+
+                    case Veh_OHTC_Global.CmdID.cmd32:
+                        #region"cmd32"
+                        if (Veh_OHTC_Global.vehBlockPassReqst == (int)Status.NG)
+                        {
+                            DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToPause;
+                            DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.BlockSectionPassReply = Status.NG;                     // Roy*180319
+
+                            DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.Section = DDS_Global.motionInfoInterCommReptData.BlockSectionPassReqst.Section;                     // Roy*180319
+
+                            DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.NG;
+                            DDS_Global.motionInfoInterCommSendData.isStop = (int)Status.OK;
+                            DDS_Global.motionInfoInterCommSendData.isPause = (int)Status.OK;
+                        }
+                        else
+                        {
+                            DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToContinue;
+                            DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.BlockSectionPassReply = Status.OK;                     // Roy*180319
+
+                            DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.Section = DDS_Global.motionInfoInterCommReptData.BlockSectionPassReqst.Section;                     // Roy*180319
+
+                            DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.OK;
+                            DDS_Global.motionInfoInterCommSendData.isStop = (int)Status.NG;
+                            DDS_Global.motionInfoInterCommSendData.isPause = (int)Status.NG;
+                        }
+
+                        DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+                        // Inform SendData Sent
+                        DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+                        DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                        DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+                        //
+                        #endregion          // "cmd32"
+
+                        break;
+
+                    case Veh_OHTC_Global.CmdID.cmd37:
+                        #region "cmd37"
+                        string cmdID = "37";
+                        string cstID = "1111";
+                        int cmpCode = 0;
+
+                        ActiveType actType = ActiveType.Move;
+                        CompleteStatus cmpStatus = CompleteStatus.Normal;
+                        StatusMachine.Veh_OHTC_Global.vehOHTComm.sned_Str132(cmdID, actType, cstID, cmpCode, cmpStatus);                // xxx 
+                        #endregion          // "cmd37"
+
+                        break;
+                }           // # switch (enCmdID)
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return false;
+            }
+        }
+
+
+        protected bool Veh_EventsOnDriving_Procedure(Veh_OHTC_Global.CmdID enCmdID)
+        {
+            try
+            {
+                switch (enCmdID)
+                {
+                    case Veh_OHTC_Global.CmdID.cmd39:
+                        //// Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.Pause;                   // Roy-180319
+                        Task.Run(() => ActionTypeStatusMachine());                    // Roy-171128 .... [Cmd39: 暫停(純)走行] Pause/Stop 或 [Cmd37: 中止搬送/上下貨]  Cancel/Abort 應該都是發生在 其它 狀態機正在執行中 才有作用 ...                   // Roy+180302
+                        break;
+
+                    case Veh_OHTC_Global.CmdID.cmd37:
+                        //
+                        Task.Run(() => ActionTypeStatusMachine());                    // Roy+180319
+                        break;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return false;
+            }
+        }
+
+
+        protected bool Veh_CycleRun_Procedure()
+        {
+            try
+            {
+                string strActionName = string.Empty;
+
+                #region Move to Entry Point
+
+                #region Inform OHT Vehicle move to Entry Point via DDS
+                // Send the Guiding sections
+                DDS_Global.motionInfoInterCommSendData.udtMove.Sections = Veh_OHTC_Global.GuideSections;
+                DDS_Global.motionInfoInterCommSendData.udtMove.Address = Veh_OHTC_Global.Address;
+
+                DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToMove;
+                DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = MoveType.single;
+
+                DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.OK;
+                DDS_Global.motionInfoInterCommSendData.isStop = (int)Status.NG;
+                DDS_Global.motionInfoInterCommSendData.isPause = (int)Status.NG;
+                DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+                // Inform SendData Sent
+                DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+                DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+
+                //
+                Console.WriteLine("#{0}# Send Msg to Vehicle. MoveType = {1}", DateTime.Now.ToString("HH:mm:ss.fff"), MoveType.single.ToString());               // Roy*171030
+                Console.WriteLine("#{0}# Start Cycle Run: Move To Entry Point", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                #endregion              // Inform OHT Vehicle move to Entry Point via DDS
+
+                #region DDS Share Memory Data Exchange
+                motionInfoInterCommReport = null;
+                sampleInfo_RptData = null;
+
+                while (enJobDone == VehJobDone.No)
+                {
+                    //if (!Veh_OHTC_Global.blCycleRun) enJobDone = VehJobDone.Yes;
+                    DDS_Global.motionInfo_HandShakeRecieveDataReader.Take(
+                        ref handShakeRxData,
+                        ref sampleInfo_RxData,
+                        DDS.SampleStateKind.Any,
+                        DDS.ViewStateKind.Any,
+                        DDS.InstanceStateKind.Any);
+
+                    DDS_Global.motionInfo_HandShakeSendDataReader.Take(
+                        ref handShakeSendData,
+                        ref sampleInfo_SendData,
+                        DDS.SampleStateKind.Any,
+                        DDS.ViewStateKind.Any,
+                        DDS.InstanceStateKind.Any);
+
+                    if (handShakeSendData != null)
+                    {
+                        foreach (MotionInfo_HandShake_SendData data in handShakeSendData)
+                        {
+                            if (data.cmdReceive == 1)
+                            {
+                                Veh_OHTC_Global.blSendDataReceived = true;
+                                DDS_Global.motionInfoHandShakeTxData.cmdSend = 0;
+                                DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                                DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+                            }
+                            else
+                            {
+                                Veh_OHTC_Global.blSendDataReceived = false;
+                            }
+                        }
+                    }
+
+                    if (handShakeRxData != null)
+                    {
+                        foreach (MotionInfo_HandShake_RecieveData data in handShakeRxData)
+                        {
+                            if (data.cmdSend == 1)
+                            {
+                                Veh_OHTC_Global.blRxDataSent = true;
+                                DDS_Global.motionInfoHandShakeRxData.cmdReceive = 1;
+                                DDS_Global.motionInfo_HandShakeRecieveDataWriter.Write(DDS_Global.motionInfoHandShakeRxData);
+                            }
+                            else
+                            {
+                                Veh_OHTC_Global.blRxDataSent = false;
+                            }
+                        }
+                    }
+
+                    #region Check OHT Vehicle Motion Status From DDS Exchanged Data for Reporting to OHTC
+                    if (Veh_OHTC_Global.blRxDataSent)
+                    {
+                        strActionName = "Move To Entry";
+
+                        DDS.ReturnCode status = DDS_Global.motionInfo_VehInterCommReptDataReader.Take(
+                                ref motionInfoInterCommReport,
+                                ref sampleInfo_RptData,
+                                 DDS.SampleStateKind.Any, DDS.ViewStateKind.Any, DDS.InstanceStateKind.Any);                        // Roy*180302
+
+                        if (status == DDS.ReturnCode.Ok)                        // Roy+180302
+                        {
+                            Console.WriteLine("#{0}# Vehicle Send Data", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                        }
+
+                        if (motionInfoInterCommReport != null)
+                        {
+                            foreach (MotionInfo_Vehicle_Inter_Comm_ReportData data in motionInfoInterCommReport)
+                            {
+                                //Transport report and Block Query
+                                #region Vehicle Motion Status Report
+                                switch (data.eventTypes)
+                                {
+                                    case (int)VehEventTypes.Address_Pass:
+                                        Console.WriteLine("#{0}# {2}: Address {1} Passed.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);               // Roy*171030
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            // With Connection to OHTC
+                                            SendValuesForRept(data, "134");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# {2}: Address {1} Passed Sent.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# {1}: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);
+                                                Console.WriteLine("#{0}# {1}: Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName, strActionName);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // Without Connection to OHTC
+                                            Console.WriteLine("#{0}# {2}: Address {1} Passed.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.BlockSection_Query:                     // Roy*180319
+                                        Console.WriteLine("\n#{0}# {2}: Send Block Query at Address {1}", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);               // Roy*171030
+                                        //
+                                        Veh_OHTC_Global.BlockControlSection = data.BlockControlSection;                    // Roy+171128
+                                        Veh_OHTC_Global.queryBlockSection = data.Section;
+                                        Veh_OHTC_Global.queryVehAddres = data.Address;
+
+                                        //Wait for OHTC Reply
+                                        if (!Veh_OHTC_Global.OffLineTest)            // w/wo Connection to OHTC
+                                        {
+                                            // With Connection to OHTC
+                                            SendValuesForRept(data, "134");
+
+                                            // waiting for OHTC reply 
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                //Internal Trigger
+                                                //OnEventBlockControlQuery(new BlockControlQueryArg(data.BlockPassReqst));
+                                                // OHTC Reply
+
+                                                if (Veh_OHTC_Global.blBlockCtrl)            // w/wo BlockOuery Option
+                                                {
+                                                    // With BlockControl option
+                                                    Console.WriteLine("#{0}# {1}: Block Query Wait for Reply", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);               // Roy*171030
+
+                                                    //OHTC signaled
+                                                    if (Veh_OHTC_Global.vehBlockPassReply == (int)Status.OK)
+                                                    {
+                                                        Veh_BlockControl_Move_Continue(MoveType.single);
+                                                        Console.WriteLine("#{0}# {1} : Block Query Move Grant-Pass\n", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);               // Roy*171030                // Roy*180308
+                                                    }
+                                                    else
+                                                    {
+                                                        Veh_BlockControl_Move_Stop(MoveType.single);
+                                                        Console.WriteLine("#{0}# {1} : Block Query Stop Moving\n", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);               // Roy*171030
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    // No BlockControl option. Just Move 
+                                                    Veh_BlockControl_Move_Continue(MoveType.single);
+                                                    Console.WriteLine("#{0}# {1}: Block Query Move Grant-Pass\n", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);               // Roy*171030                // Roy*180308
+                                                }
+                                            }
+                                            else
+                                            {
+                                                //Raise Timeout Event
+                                                //Block Control Time out
+                                                Console.WriteLine("#{0}# {1}: Block Query Time Out", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);               // Roy*171030
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);
+                                                Console.WriteLine("#{0}# {1}: TimeOut Stop Moving\n", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            //Without connection to OHTC
+                                            // OffLineTest is true
+                                            if (Veh_OHTC_Global.vehBlockPassReply == (int)Status.OK)
+                                            {
+                                                Veh_BlockControl_Move_Continue(MoveType.single);
+                                                Console.WriteLine("#{0}# {1}: Block Query Move Grant-Pass\n", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);               // Roy*171030                // Roy*180308
+                                            }
+                                            else
+                                            {
+                                                Veh_BlockControl_Move_Stop(MoveType.single);
+                                                Console.WriteLine("#{0}# {1}: Block Query Stop Moving\n", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);               // Roy*171030
+                                            }
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.Address_Arrival:
+                                        Console.WriteLine("#{0}# {2}: Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);               // Roy*171030
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            SendValuesForRept(data, "134");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# {2}: Address {1} Arrived Sent.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# {1}: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);
+                                                Console.WriteLine("#{0}# {1}: TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("#{0}# {2}: Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.Moving_Restart:
+                                        Console.WriteLine("#{0}# {2}: Moving Restart Address {1}", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);               // Roy*171030
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            SendValuesForRept(data, "144");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# {2}: Address {1} Moving Restarted.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# {1}: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);
+                                                Console.WriteLine("#{0}# {1}: TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("#{0}# {2}: Address {1} Moving Restarted.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.Moving_Pause:
+                                        Console.WriteLine("#{0}# {2}: Moving Paused Address {1}", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);               // Roy*171030
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            SendValuesForRept(data, "144");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# {2}: Address {1} Moving Paused.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# {1}: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);
+                                                Console.WriteLine("#{0}# {1}: TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("#{0}# {2}: Address {1} Moving Paused.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.Moving_Complete:                    // cycle (可能) 不適用 ...
+                                        Console.WriteLine("#{0}# {2}: Moving Complete {1}", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);               // Roy*171030  
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            SendValuesForRept(data, "132");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# {2}: Address {1} Moving Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# {1}: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);
+                                                Console.WriteLine("#{0}# {1}: TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("#{0}# {2}: Address {1} Moving complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+                                        }
+
+                                        break;
+
+                                }           // # switch (data.eventTypes)
+
+
+                                prevAddress = data.Address;
+
+
+                                // Wait for the Vehicle to arrive at the entrance of cycle run route
+                                int completeCode = (int)data.cmpCode;
+                                int CompleteStatus = (int)data.cmpStatus;
+
+                                //if ((data.cmpCode == (int)VehCompleteFlag.Finished) && (data.cmpStatus == (int)VehCompleteStatus.Normal))               // Roy-180319
+                                if ((data.cmpCode == (int)VehCompleteFlag.Finished) && (data.cmpStatus == (int)VehCompleteStatus.CmpAsNormal)
+                                    && (data.Address == DDS_Global.motionInfoInterCommSendData.udtMove.Address))               // Roy+180319
+                                {
+                                    Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.Cycle;
+                                    DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = MoveType.cycle;
+                                    DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToStop;
+                                    DDS_Global.motionInfoInterCommSendData.udtMove.Sections = Veh_OHTC_Global.CycleSections;
+                                    //
+
+                                    if (!Veh_OHTC_Global.OffLineTest)
+                                    {
+                                        SendValuesForRept(data, "132");
+
+                                        if (!vehTcpComm.TcpIpTimeOut)
+                                        {
+                                            Console.WriteLine("#{0}# {2}: Address {1} Moving Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+                                        }
+                                        else
+                                        {
+                                            // OHTC Respond Timeout
+                                            Console.WriteLine("#{0}# {1}: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);
+                                            Veh_TcpIpComm_TimeOutStop(MoveType.single);
+                                            Console.WriteLine("#{0}# {1}: Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        Console.WriteLine("#{0}# {2}: Address {1} Moving Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+                                    }
+
+                                    //
+                                    enJobDone = VehJobDone.Yes;
+
+                                    Console.WriteLine("#{0}# {1}: Vehicle Complete single Move\n\n", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);               // Roy*171030                     // Roy*180308
+                                }           // # if ((data.cmpCode == (int)VehCompleteFlag.Finished) && (data.cmpStatus == (int)VehCompleteStatus.Normal))
+                                #endregion      // Vehicle Motion Status Report
+                            }           // # foreach (MotionInfo_Vehicle_Inter_Comm_ReportData data in motionInfoInterCommReport)
+                        }           // # if (motionInfoInterCommReport != null)
+                    }           // # if (Veh_OHTC_Global.blRxDataSent)
+                    #endregion          // Check OHT Vehicle Motion Status From DDS Exchanged Data for Reporting to OHTC
+
+                    SpinWait.SpinUntil(() => false, 10);
+                }           // # while (enJobDone == VehJobDone.No)
+                #endregion          // DDS Share Memory Data Exchange
+
+                #endregion          // Move to Entry Point
+
+
+
+                // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+
+                // Vehicle has arrived at the entry point of cycle run
+                // Send the cycle run sections Info 
+                #region Begin Cycle Run
+
+                #region Inform OHT Vehicle to Start a Cycle Run
+                DDS_Global.motionInfoInterCommSendData.udtMove.Sections = Veh_OHTC_Global.CycleSections;
+                DDS_Global.motionInfoInterCommSendData.udtMove.Address = Veh_OHTC_Global.Address;
+
+                DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToMove;
+                DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = MoveType.cycle;
+
+                DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.OK;
+                DDS_Global.motionInfoInterCommSendData.isStop = (int)Status.NG;
+                DDS_Global.motionInfoInterCommSendData.isPause = (int)Status.NG;
+                DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+                // Inform SendData Sent
+                DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+                DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+
+                //
+                Console.WriteLine("#{0}# Send Msg to Vehicle. Move Type = {1}", DateTime.Now.ToString("HH:mm:ss.fff"), MoveType.cycle.ToString());               // Roy*171030
+                Console.WriteLine("#{0}# Round Move: Cycle Run Started", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                #endregion          // Inform OHT Vehicle to Start a Cycle Run
+
+                #region  DDS Share Memory Data Exchange
+                enJobDone = VehJobDone.No;
+                motionInfoInterCommReport = null;
+                sampleInfo_RptData = null;
+
+                while (enJobDone == VehJobDone.No)
+                {
+                    //if (!Veh_OHTC_Global.blCycleRun) enJobDone = VehJobDone.Yes;
+                    DDS_Global.motionInfo_HandShakeRecieveDataReader.Take(
+                        ref handShakeRxData,
+                        ref sampleInfo_RxData,
+                        DDS.SampleStateKind.Any,
+                        DDS.ViewStateKind.Any,
+                        DDS.InstanceStateKind.Any);
+
+                    DDS_Global.motionInfo_HandShakeSendDataReader.Take(
+                        ref handShakeSendData,
+                        ref sampleInfo_SendData,
+                        DDS.SampleStateKind.Any,
+                        DDS.ViewStateKind.Any,
+                        DDS.InstanceStateKind.Any);
+
+                    if (handShakeSendData != null)
+                    {
+                        foreach (MotionInfo_HandShake_SendData data in handShakeSendData)
+                        {
+                            if (data.cmdReceive == 1)
+                            {
+                                Veh_OHTC_Global.blSendDataReceived = true;
+                                DDS_Global.motionInfoHandShakeTxData.cmdSend = 0;
+                                DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                                DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+                            }
+                            else
+                            {
+                                Veh_OHTC_Global.blSendDataReceived = false;
+                            }
+                        }
+                    }
+
+                    if (handShakeRxData != null)
+                    {
+                        foreach (MotionInfo_HandShake_RecieveData data in handShakeRxData)
+                        {
+                            if (data.cmdSend == 1)
+                            {
+                                Veh_OHTC_Global.blRxDataSent = true;
+                                DDS_Global.motionInfoHandShakeRxData.cmdReceive = 1;
+                                DDS_Global.motionInfo_HandShakeRecieveDataWriter.Write(DDS_Global.motionInfoHandShakeRxData);
+                            }
+                            else
+                            {
+                                Veh_OHTC_Global.blRxDataSent = false;
+                            }
+                        }
+                    }
+
+                    #region Check OHT Vehicle Motion Status From DDS Exchanged Data
+                    if (Veh_OHTC_Global.blRxDataSent)
+                    {
+                        DDS.ReturnCode status = DDS_Global.motionInfo_VehInterCommReptDataReader.Take(
+                                ref motionInfoInterCommReport,
+                                ref sampleInfo_RptData,
+                                 DDS.SampleStateKind.Any, DDS.ViewStateKind.Any, DDS.InstanceStateKind.Any);                        // Roy*180302
+
+                        if (status == DDS.ReturnCode.Ok)                        // Roy+180302
+                        {
+                            //Console.WriteLine("#{0}# Vehicle Send Data", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy-+180302
+                        }
+
+                        if (motionInfoInterCommReport != null)
+                        {
+                            foreach (MotionInfo_Vehicle_Inter_Comm_ReportData data in motionInfoInterCommReport)
+                            {
+                                //Transport report and Block Query
+                                #region Check Vehicle Motion Status for reportint to OHTC
+                                switch (data.eventTypes)
+                                {
+                                    case (int)VehEventTypes.Address_Pass:
+                                        Console.WriteLine("#{0}# Cycle Run: Address {1} Passed.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());               // Roy*171030
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            // With Connection to OHTC
+                                            SendValuesForRept(data, "134");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# Cycle Run: Address {1} Passed Sent.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# Cycle Run: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.cycle);
+                                                Console.WriteLine("#{0}# Cycle Run: Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // Without Connection to OHTC
+                                            Console.WriteLine("#{0}# Cycle Run: Address {1} Passed.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.BlockSection_Query:                     // Roy*180319
+                                        //Send Request to OHTC
+                                        Console.WriteLine("\n#{0}# Cycle Run: Send Block Query Address {1}", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());               // Roy*171030
+                                        //
+                                        Veh_OHTC_Global.BlockControlSection = data.BlockControlSection;                    // Roy+171128
+                                        Veh_OHTC_Global.queryBlockSection = data.Section;
+                                        Veh_OHTC_Global.queryVehAddres = data.Address;
+
+                                        // Send BlockQuery to OHTC if OffLineTest is false
+                                        if (!Veh_OHTC_Global.OffLineTest)           // w/wo Connection to OHTC
+                                        {
+                                            // With Connection to OHTC
+                                            SendValuesForRept(data, "134");
+
+                                            // waiting for OHTC reply 
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                //Internal Trigger
+                                                //OnEventBlockControlQuery(new BlockControlQueryArg(data.BlockPassReqst));
+                                                // OHTC Reply
+
+                                                if (Veh_OHTC_Global.blBlockCtrl)             // w/wo BlockOuery Option
+                                                {
+                                                    // With BlockControl option
+                                                    Console.WriteLine("#{0}# Cycle Run: Block Query Wait for Reply", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+
+                                                    //OHTC signaled
+                                                    if (Veh_OHTC_Global.vehBlockPassReply == (int)Status.OK)
+                                                    {
+                                                        Veh_BlockControl_Move_Continue(MoveType.cycle);
+                                                        Console.WriteLine("#{0}# Cycle Run: Block Query Move Grant-Pass\n", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                                    }
+                                                    else
+                                                    {
+                                                        Veh_BlockControl_Move_Stop(MoveType.cycle);
+                                                        Console.WriteLine("#{0}# Cycle Run: Block Query Stop Moving\n", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    // No BlockControl option. Just Move 
+                                                    Veh_BlockControl_Move_Continue(MoveType.cycle);
+                                                    Console.WriteLine("#{0}# Cycle Run: Block Query Move Grant-Pass\n", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                                }
+                                            }
+                                            else
+                                            {
+                                                //Raise Timeout Event
+                                                //Block Control Time out
+                                                Console.WriteLine("#{0}# Cycle Run: Block Query Time Out", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.cycle);
+                                                Console.WriteLine("#{0}# Cycle Run: TimeOut Stop Moving\n", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            //Without connection to OHTC
+                                            // OffLineTest is true
+                                            if (Veh_OHTC_Global.vehBlockPassReply == (int)Status.OK)
+                                            {
+                                                Veh_BlockControl_Move_Continue(MoveType.cycle);
+                                                Console.WriteLine("#{0}# Cycle Run: Block Query Move Grant-Pass\n", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                            }
+                                            else
+                                            {
+                                                Veh_BlockControl_Move_Stop(MoveType.cycle);
+                                                Console.WriteLine("#{0}# Cycle Run: Block Query Stop Moving\n", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                            }
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.Address_Arrival:
+                                        Console.WriteLine("#{0}# Cycle Run: Address {1} Arrived", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());               // Roy*171030
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            SendValuesForRept(data, "134");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# Cycle Run: Address {1} Arrived Sent.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# Cycle Run: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.cycle);
+                                                Console.WriteLine("#{0}# Cycle Run: TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("#{0}# Cycle Run: Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.Moving_Restart:
+                                        Console.WriteLine("#{0}# Cycle Run: Moving Restarted at Address {1}", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());               // Roy*171030
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            SendValuesForRept(data, "144");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# Cycle Run: Address {1} Moving Restarted.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# Cycle Run: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.cycle);
+                                                Console.WriteLine("#{0}# Cycle Run: TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("#{0}# Cycle Run: Address {1} Moving Restarted.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.Moving_Pause:
+                                        Console.WriteLine("#{0}# Cycle Run: Moveing Paused at address {1}", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());               // Roy*171030
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            SendValuesForRept(data, "144");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# Cycle Run: Address {1} Moving Paused.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# Cycle Run: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.cycle);
+                                                Console.WriteLine("#{0}# Cycle Run: TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("#{0}# Cycle Run: Address {1} Moving Paused.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                        }
+
+                                        break;
+
+
+                                    //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                                    //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++               // Roy+180308
+                                    case (int)VehEventTypes.Moving_Complete:                    // cycle (可能) 不適用 ...
+                                        Console.WriteLine("#{0}# {2}: Moving Complete {1}", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            SendValuesForRept(data, "132");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# {2}: Address {1} Moving Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# {1}: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);
+                                                Console.WriteLine("#{0}# {1}: TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"), strActionName);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("#{0}# {2}: Address {1} Moving complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), strActionName);
+                                        }
+
+
+                                        if (DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType == CmdType.CmdToStop)             //+++++ 
+                                        {
+                                            Console.WriteLine("#{0}# : To break CycleRun Proceudre ...", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            enJobDone = VehJobDone.Yes;                 //+++ 
+                                        }
+
+
+                                        break;
+                                    //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                                    //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+                                }
+
+
+                                prevAddress = data.Address;
+
+
+                                // Wait for the Vehicle to arrive at the entrance of cycle run route
+                                if ((data.cmpCode == (int)VehCompleteFlag.Finished) && (data.cmpStatus == (int)VehCompleteStatus.CmpAsNormal))
+                                {
+
+                                    /*                  // Roy-171128
+                                    Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.Cycle;
+                                    DDS_Global.motionInfoInterCommSendData.Move.Type = MoveType.cycle;
+                                    DDS_Global.motionInfoInterCommSendData.CmdType.cmdType = CmdType.Stop;
+                                    DDS_Global.motionInfoInterCommSendData.Move.Sections = Veh_OHTC_Global.CycleSections;
+                                    //
+                                    
+                                    if (!Veh_OHTC_Global.OffLineTest)
+                                    {
+                                        SendValuesForRept(data, "132");
+                                        if (!vehTcpComm.TcpIpTimeOut)
+                                        {
+                                            Console.WriteLine("#{0}# Cycle Run: Address {1} Moving Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                        }
+                                        else
+                                        {
+                                            Veh_TcpIpComm_TimeOutStop(MoveType.cycle);
+                                            Console.WriteLine("#{0}# Cycle Run: Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            Console.WriteLine("#{0}# Cycle Run: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                        }
+                                    }
+                                    else
+                                    {
+                                        Console.WriteLine("#{0}# Cycle Run: Address {1} Moving Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                    }
+                                    //
+
+                                    enJobDone = VehJobDone.Yes;
+                                    Console.WriteLine("#{0}# Vehicle Exit Cycle Run", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                    */
+
+
+                                    ////enJobDone = VehJobDone.Yes;                 // Roy-+180308
+
+
+                                    //+++++++++++++++++++++++++++++++++++++
+                                    //+++++++++++++++++++++++++++++++++++++                 // Roy+171128
+                                    /*                  // Roy-180308
+                                    //if ((Veh_OHTC_Global.enActionType == Veh_OHTC_Global.ActionType.Pause) || (Veh_OHTC_Global.enActionType == Veh_OHTC_Global.ActionType.Stop))                // Roy-180302
+                                    if ((Veh_OHTC_Global.enActionType == Veh_OHTC_Global.ActionType.Stop))                // Roy+180302
+                                    {
+                                        //System.Diagnostics.Debug.Assert(false);                // Roy+180302
+
+                                        Console.WriteLine("#{0}# Start 'Stop' Procedure", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                        //Veh_Pause_Procedure();                // Roy-180302
+                                        Veh_Stop_Procedure();                // Roy+180302
+                                        Console.WriteLine("#{0}# 'Stop' Procedure Complete", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                    }
+                                    */
+
+                                    Console.WriteLine("#{0}# Cycle Run - Hit Entrance/Exit Point ~~ ", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                    Console.WriteLine("\n\n");              // Roy+180129 
+                                    //+++++++++++++++++++++++++++++++++++++
+                                    //+++++++++++++++++++++++++++++++++++++
+
+                                }               // # if ((data.cmpCode == (int)VehCompleteFlag.Finished) && (data.cmpStatus == (int)VehCompleteStatus.Normal))
+                                #endregion
+                            }           // # foreach (MotionInfo_Vehicle_Inter_Comm_ReportData data in motionInfoInterCommReport)
+                        }           // # if (motionInfoInterCommReport != null)
+                    }           // # if (Veh_OHTC_Global.blRxDataSent)
+                    #endregion          //  Check OHT Vehicle Motion Status From DDS Exchanged Data
+
+                    SpinWait.SpinUntil(() => false, 10);
+
+                }           // # while (enJobDone == VehJobDone.No)
+                #endregion          // DDS Share Memory Data Exchange
+
+                #endregion          // Begin Cycle Run
+
+                Console.WriteLine("#{0}# Cycle Run - Ending ~~ ", DateTime.Now.ToString("HH:mm:ss.fff"));                // Roy+180308
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return false;
+            }
+        }
+
+
+        /*          // Roy-180319
+        protected bool Veh_CycleRun_Procedure(bool done)                        // useless so far ...
+        {
+            try
+            {
+                Veh_Move_Procedure(done, MoveType.single, Veh_OHTC_Global.GuideSections);
+                Veh_Move_Procedure(done, MoveType.cycle, Veh_OHTC_Global.CycleSections);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return false;
+            }
+        }
+        */
+
+
+        //protected bool Veh_LoadUnLoad_Procedure(LoadCommand enLoad, MoveType type, string[] sections, int cstID)                // Roy-180308
+        protected bool Veh_LoadUnLoad_Procedure(LoadCommand enLoad, MoveType type, string[] sections, string cstID)                // Roy+180308
+        {
+            bool done = false;
+            string loadStatus = string.Empty;
+
+            bool bIsOk2GoOnTrigger = false;                         // Roy+180308
+
+            try
+            {
+                #region Inform OHT Vehicle move to Load Port or Unload Port
+                //
+                //DDS_Global.motionInfoInterCommSendData.Load.CSTID = cstID;                        // Roy-180308
+
+                DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToMove;
+                DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = (int)MoveType.single;                //+++               // Roy+180319
+
+                DDS_Global.motionInfoInterCommSendData.udtMove.Sections = sections;
+                System.Diagnostics.Debug.Assert(sections.Count() > 0);                        // Roy+180308
+
+                if (enLoad == LoadCommand.Load)
+                {
+                    DDS_Global.motionInfoInterCommSendData.udtMove.Address = Veh_OHTC_Global.LoadAddress;
+                    loadStatus = "Load";
+                }
+                else
+                {
+                    DDS_Global.motionInfoInterCommSendData.udtMove.Address = Veh_OHTC_Global.UnloadAddress;              // Veh_OHTC_Global.ToAddress;               // Roy*180319
+                    loadStatus = "UnLoad";
+                }
+
+                DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = type;
+                DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.OK;
+                DDS_Global.motionInfoInterCommSendData.isStop = (int)Status.NG;
+                DDS_Global.motionInfoInterCommSendData.isPause = (int)Status.NG;
+
+                //
+                DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+                // Inform SendData Sent
+                DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+                DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+                //
+                #endregion
+
+
+                #region DDS Share Memory Exchange
+                motionInfoInterCommReport = null;
+                sampleInfo_RptData = null;
+
+                done = false;                           // Roy+180308 
+
+                //
+                while (!done)
+                {
+                    DDS_Global.motionInfo_HandShakeRecieveDataReader.Take(
+                        ref handShakeRxData,
+                        ref sampleInfo_RxData,
+                        DDS.SampleStateKind.Any,
+                        DDS.ViewStateKind.Any,
+                        DDS.InstanceStateKind.Any);
+
+                    DDS_Global.motionInfo_HandShakeSendDataReader.Take(
+                        ref handShakeSendData,
+                        ref sampleInfo_SendData,
+                        DDS.SampleStateKind.Any,
+                        DDS.ViewStateKind.Any,
+                        DDS.InstanceStateKind.Any);
+
+                    // Handshaking with OHT 
+                    if (handShakeSendData != null)
+                    {
+                        foreach (MotionInfo_HandShake_SendData data in handShakeSendData)
+                        {
+                            if (data.cmdReceive == 1)
+                            {
+                                Veh_OHTC_Global.blSendDataReceived = true;
+                                DDS_Global.motionInfoHandShakeTxData.cmdSend = 0;
+                                DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                                DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+                            }
+                            else
+                            {
+                                Veh_OHTC_Global.blSendDataReceived = false;
+                            }
+                        }
+                    }
+
+                    if (handShakeRxData != null)
+                    {
+                        foreach (MotionInfo_HandShake_RecieveData data in handShakeRxData)
+                        {
+                            if (data.cmdSend == 1)
+                            {
+                                Veh_OHTC_Global.blRxDataSent = true;
+                                DDS_Global.motionInfoHandShakeRxData.cmdReceive = 1;
+                                DDS_Global.motionInfo_HandShakeRecieveDataWriter.Write(DDS_Global.motionInfoHandShakeRxData);
+                            }
+                            else
+                            {
+                                Veh_OHTC_Global.blRxDataSent = false;
+                            }
+                        }
+                    }
+                    //
+
+                    #region Check OHT Vehicle Motion Status via DDS Exchanged Data
+                    if (Veh_OHTC_Global.blRxDataSent)
+                    {
+                        DDS_Global.motionInfo_VehInterCommReptDataReader.Take(
+                                ref motionInfoInterCommReport,
+                                ref sampleInfo_RptData,
+                                 DDS.SampleStateKind.Any, DDS.ViewStateKind.Any, DDS.InstanceStateKind.Any);
+
+                        if (motionInfoInterCommReport != null)
+                        {
+                            foreach (MotionInfo_Vehicle_Inter_Comm_ReportData data in motionInfoInterCommReport)
+                            {
+                                //Transport report and Block Query
+                                #region Check Vehicle Motion Status for reporting to OHTC
+                                switch (data.eventTypes)
+                                {
+                                    case (int)VehEventTypes.Address_Pass:
+                                        Console.WriteLine("#{0}# {2} : Address {1} Passed.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            // With Connection to OHTC
+                                            SendValuesForRept(data, "134");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# {2}: Address {1} Passed Sent.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# {2} : OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.cycle);
+                                                Console.WriteLine("#{0}# {2} : Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // Without Connection to OHTC
+                                            Console.WriteLine("#{0}# {2} : Address {1} Passed.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.BlockSection_Query:                     // Roy*180319
+                                        //Send Request to OHTC
+                                        Console.WriteLine("\n#{0}# {2} : Send Block Query Address {1}", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);               // Roy*171030
+
+                                        // Send BlockQuery to OHTC if OffLineTest is false
+                                        Veh_OHTC_Global.BlockControlSection = data.BlockControlSection;                    // Roy+171128
+                                        Veh_OHTC_Global.queryBlockSection = data.Section;
+                                        Veh_OHTC_Global.queryVehAddres = data.Address;
+
+                                        if (!Veh_OHTC_Global.OffLineTest)           // w/wo Connection to OHTC
+                                        {
+                                            // With Connection to OHTC
+                                            Console.WriteLine("#{0}# {1}: Block Query Wait for Reply", DateTime.Now.ToString("HH:mm:ss.fff"), loadStatus);
+                                            SendValuesForRept(data, "134");
+
+                                            // waiting for OHTC reply 
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                //Internal Trigger
+                                                //OnEventBlockControlQuery(new BlockControlQueryArg(data.BlockPassReqst));
+                                                // OHTC Reply
+
+                                                if (Veh_OHTC_Global.blBlockCtrl)            // w/wo BlockOuery Option
+                                                {
+                                                    // With BlockControl option
+                                                    //OHTC signaled
+                                                    if (Veh_OHTC_Global.vehBlockPassReply == (int)Status.OK)
+                                                    {
+                                                        Veh_BlockControl_Move_Continue(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                        Console.WriteLine("#{0}# {1}: Block Query Move Grant-Pass\n", DateTime.Now.ToString("HH:mm:ss.fff"), loadStatus);               // Roy*171030
+                                                    }
+                                                    else
+                                                    {
+                                                        Veh_BlockControl_Move_Stop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                        Console.WriteLine("#{0}# {1} : Block Query Stop Moving\n", DateTime.Now.ToString("HH:mm:ss.fff"), loadStatus);               // Roy*171030
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    // No BlockControl option. Just Move 
+                                                    Veh_BlockControl_Move_Continue(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                    Console.WriteLine("#{0}# {1}: No Block Query Move Grant-Pass\n", DateTime.Now.ToString("HH:mm:ss.fff"), loadStatus);               // Roy*171030
+                                                }
+                                            }
+                                            else
+                                            {
+                                                //Raise Timeout Event
+                                                //Block Control Time out
+                                                Console.WriteLine("#{0}# {1} : Block Query Time Out", DateTime.Now.ToString("HH:mm:ss.fff"), loadStatus);               // Roy*171030
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# {1} : TimeOut Stop Moving\n", DateTime.Now.ToString("HH:mm:ss.fff"), loadStatus);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            //Without connection to OHTC
+                                            // OffLineTest is true
+                                            if (Veh_OHTC_Global.vehBlockPassReply == (int)Status.OK)
+                                            {
+                                                Veh_BlockControl_Move_Continue(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# {1} : Block Query Move Grant-Pass\n", DateTime.Now.ToString("HH:mm:ss.fff"), loadStatus);               // Roy*171030
+                                            }
+                                            else
+                                            {
+                                                Veh_BlockControl_Move_Stop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# {1} : Block Query Stop Moving\n", DateTime.Now.ToString("HH:mm:ss.fff"), loadStatus);               // Roy*171030
+                                            }
+                                        }
+
+                                        //Internal Trigger
+                                        //OnEventBlockControlQuery(new BlockControlQueryArg(data.BlockPassReqst));
+                                        //Wait for OHTC Reply
+
+                                        break;
+
+                                    case (int)VehEventTypes.Address_Arrival:
+                                        Console.WriteLine("#{0}# {2} : Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            // With Connection to OHTC
+                                            SendValuesForRept(data, "134");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# {2}: Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# {2} : OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# {2} : Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // Without Connection to OHTC
+                                            Console.WriteLine("#{0}# {2} : Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.Moving_Restart:
+                                        Console.WriteLine("#{0}# {2} : Address {1} Restarted.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            // With Connection to OHTC
+                                            SendValuesForRept(data, "144");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# {2}: Address {1} Restarted.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# {2} : OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# {2} : Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // Without Connection to OHTC
+                                            Console.WriteLine("#{0}# {2} : Address {1} Restarted.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.Moving_Pause:
+                                        Console.WriteLine("#{0}# {2} : Address {1} Paused.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            // With Connection to OHTC
+                                            SendValuesForRept(data, "144");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# {2}: Address {1} Paused.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# {2} : OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# {2} : Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // Without Connection to OHTC
+                                            Console.WriteLine("#{0}# {2} : Address {1} Paused.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                        }
+
+                                        break;
+
+
+
+                                    //++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                                    //++++++++++++++++++++++++++++++++++++++++++++++++++++++                    // Roy+180308
+                                    case (int)VehEventTypes.Moving_Complete:
+                                        Console.WriteLine("#{0}# {2} : Address {1} Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            // With Connection to OHTC
+                                            SendValuesForRept(data, "144");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# {2}: Address {1} Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+
+                                                if (data.Address == DDS_Global.motionInfoInterCommSendData.udtMove.Address)                // Roy+180319
+                                                {
+                                                    bIsOk2GoOnTrigger = true;
+                                                }
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# {2} : OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);
+                                                Console.WriteLine("#{0}# {2} : Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // Without Connection to OHTC
+                                            Console.WriteLine("#{0}# {2} : Address {1} Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+
+                                            if (data.Address == DDS_Global.motionInfoInterCommSendData.udtMove.Address)                // Roy+180319
+                                            {
+                                                bIsOk2GoOnTrigger = true;
+                                            }
+                                        }
+
+
+                                        if (bIsOk2GoOnTrigger)
+                                        {
+                                            Console.WriteLine("\n\n#{0}# {2} : Address {1} Moving_Complete ~ Relay/Trig signal ...\n\n", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                            // 
+                                            done = TrigEventLoadUnLoadingArrival(enLoad, data, cstID);
+                                        }
+
+                                        break;
+
+
+                                    case (int)VehEventTypes.Load_Arrived:
+                                        System.Diagnostics.Debug.Assert(false);
+                                        done = TrigEventLoadUnLoadingArrival(enLoad, data, cstID);
+                                        break;
+
+
+                                    case (int)VehEventTypes.Unload_Arrived:
+                                        System.Diagnostics.Debug.Assert(false);
+                                        done = TrigEventLoadUnLoadingArrival(enLoad, data, cstID);
+                                        break;
+                                    //++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                                    //++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+                                    /*                  // Roy-180308
+                                    case (int)VehEventTypes.Load_Arrived:
+                                        Console.WriteLine("#{0}# {2} : Address {1} Load Port Arrival.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+
+                                        //Wait for the Vehicle to arrive at the Load Port 
+                                        if ((data.cmpCode == (int)VehCompleteFlag.Finished) && (data.cmpStatus == (int)VehCompleteStatus.Normal))
+                                        {
+                                            Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.Load;
+                                            DDS_Global.motionInfoInterCommSendData.Load.CSTID = cstID;
+
+                                            if (enLoad == LoadCommand.Load)
+                                                DDS_Global.motionInfoInterCommSendData.CmdType.cmdType = CmdType.Load;
+                                            else
+                                                DDS_Global.motionInfoInterCommSendData.CmdType.cmdType = CmdType.Unload;
+
+                                            DDS_Global.motionInfoInterCommSendData.Continue = (int)Status.OK;
+                                            DDS_Global.motionInfoInterCommSendData.Stop = (int)Status.OK;
+                                            DDS_Global.motionInfoInterCommSendData.Pause = (int)Status.OK;
+
+                                            //
+                                            DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+                                            // Inform SendData Sent
+                                            DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+                                            DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                                            DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+
+                                            // When motion stopped, report Load Arrival
+                                            if (!Veh_OHTC_Global.OffLineTest)
+                                            {
+                                                // With Connection to OHTC
+                                                SendValuesForRept(data, "134");
+
+                                                if (!vehTcpComm.TcpIpTimeOut)
+                                                {
+                                                    Console.WriteLine("#{0}# {2}: Address {1} Motion Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);                          // Roy*180308
+                                                }
+                                                else
+                                                {
+                                                    Console.WriteLine("#{0}# {2} : OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                                    Veh_TcpIpComm_TimeOutStop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                    Console.WriteLine("#{0}# {2} : Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                                }
+                                            }
+                                            else
+                                            {
+                                                // Without Connection to OHTC
+                                                Console.WriteLine("#{0}# {2} : Address {1} Motion Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);                          // Roy*180308
+                                            }
+
+                                            //
+                                            done = true;
+                                        }
+
+                                        break;
+
+
+                                        //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++                        // Roy+180308
+                                        case (int)VehEventTypes.Unload_Arrived:
+                                        Console.WriteLine("#{0}# {2} : Address {1} UnLoad Port Arrival.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+
+                                        //Wait for the Vehicle to arrive at the Load Port 
+                                        if ((data.cmpCode == (int)VehCompleteFlag.Finished) && (data.cmpStatus == (int)VehCompleteStatus.Normal))
+                                        {
+                                            Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.UnLoad;
+                                            DDS_Global.motionInfoInterCommSendData.Load.CSTID = cstID;
+
+                                            if (enLoad == LoadCommand.Load)
+                                                DDS_Global.motionInfoInterCommSendData.CmdType.cmdType = CmdType.Load;
+                                            else
+                                                DDS_Global.motionInfoInterCommSendData.CmdType.cmdType = CmdType.Unload;
+
+                                            DDS_Global.motionInfoInterCommSendData.Continue = (int)Status.OK;
+                                            DDS_Global.motionInfoInterCommSendData.Stop = (int)Status.OK;
+                                            DDS_Global.motionInfoInterCommSendData.Pause = (int)Status.OK;
+
+                                            //
+                                            DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+                                            // Inform SendData Sent
+                                            DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+                                            DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                                            DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+
+                                            // When motion stopped, report UnLoad Arrival
+                                            if (!Veh_OHTC_Global.OffLineTest)
+                                            {
+                                                // With Connection to OHTC
+                                                SendValuesForRept(data, "134");
+
+                                                if (!vehTcpComm.TcpIpTimeOut)
+                                                {
+                                                    Console.WriteLine("#{0}# {2}: Address {1} Motion4 Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                                }
+                                                else
+                                                {
+                                                    Console.WriteLine("#{0}# {2} : OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                                    Veh_TcpIpComm_TimeOutStop(MoveType.single);
+                                                    Console.WriteLine("#{0}# {2} : Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                                }
+                                            }
+                                            else
+                                            {
+                                                // Without Connection to OHTC
+                                                Console.WriteLine("#{0}# {2} : Address {1} Motion Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString(), loadStatus);
+                                            }
+
+                                            //
+                                            done = true;
+                                        }
+
+                                        break;
+                                        //+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++   
+                                    */
+
+                                }
+                                #endregion
+
+                                //prevAddress = data.Address;                           // Roy-180308
+
+                            }
+                        }
+                    }
+                    #endregion
+
+                    SpinWait.SpinUntil(() => false, 10);
+                }
+                #endregion
+
+
+
+                WaitForLoadUnLoading(enLoad);                         // Roy*180308 ... from WaitForLoading to WaitForLoadUnLoading
+
+
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("#{0}# Veh_LoadUnLoad_Procedure: {1}", DateTime.Now.ToString("HH:mm:ss.fff"), ex.Message);               // Roy*171030
+                return false;
+            }
+        }
+
+
+        //++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        //++++++++++++++++++++++++++++++++++++++++++++++++++++++                    // Roy+180308
+        protected bool TrigEventLoadUnLoadingArrival(LoadCommand enLoad, MotionInfo_Vehicle_Inter_Comm_ReportData data, string cstID)
+        {
+            string loadStatus = string.Empty;
+
+            if (enLoad == LoadCommand.Load)
+            {
+                #region "load-arrival event"
+                loadStatus = "Load";
+                Console.WriteLine("#{0}# {2} : Address {1} Load Port Arrival.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address, loadStatus);
+
+                Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.Load;
+                DDS_Global.motionInfoInterCommSendData.udtLoad.CSTID = cstID;                     // Roy*180319
+                DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToLoad;
+
+                DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.OK;
+                DDS_Global.motionInfoInterCommSendData.isStop = (int)Status.OK;
+                DDS_Global.motionInfoInterCommSendData.isPause = (int)Status.OK;
+
+                //
+                DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+                // Inform SendData Sent
+                DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+                DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+
+                // When motion stopped, report Load Arrival
+                if (!Veh_OHTC_Global.OffLineTest)
+                {
+                    // With Connection to OHTC
+                    SendValuesForRept(data, "134");
+
+                    if (!vehTcpComm.TcpIpTimeOut)
+                    {
+                        Console.WriteLine("#{0}# {2}: Address {1} Load Cmd-Sent Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address, loadStatus);
+                    }
+                    else
+                    {
+                        Console.WriteLine("#{0}# {2} : OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address, loadStatus);
+                        Veh_TcpIpComm_TimeOutStop(MoveType.single);
+                        Console.WriteLine("#{0}# : Stop Loading", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    }
+                }
+                else
+                {
+                    // Without Connection to OHTC
+                    Console.WriteLine("#{0}# {2} : Address {1} Load Cmd-Sent Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address, loadStatus);
+                }
+
+                //
+                ////done = true;
+                #endregion          // "load-arrival event"
+            }
+            else
+            {
+                #region "unload-arrival event"
+                loadStatus = "UnLoad";
+
+                Console.WriteLine("#{0}# {2} : Address {1} UnLoad Port Arrival.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address, loadStatus);
+
+                //Wait for the Vehicle to arrive at the Load Port 
+
+                Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.UnLoad;
+                DDS_Global.motionInfoInterCommSendData.udtUnLoad.CSTID = cstID;                     // Roy*180319
+                DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToUnload;
+
+                DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.OK;
+                DDS_Global.motionInfoInterCommSendData.isStop = (int)Status.OK;
+                DDS_Global.motionInfoInterCommSendData.isPause = (int)Status.OK;
+
+                //
+                DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+                // Inform SendData Sent
+                DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+                DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+
+                // When motion stopped, report UnLoad Arrival
+                if (!Veh_OHTC_Global.OffLineTest)
+                {
+                    // With Connection to OHTC
+                    SendValuesForRept(data, "134");
+
+                    if (!vehTcpComm.TcpIpTimeOut)
+                    {
+                        Console.WriteLine("#{0}# {2}: Address {1} UnLoad Cmd-Sent Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address, loadStatus);
+                    }
+                    else
+                    {
+                        Console.WriteLine("#{0}# {2} : OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address, loadStatus);
+                        Veh_TcpIpComm_TimeOutStop(MoveType.single);
+                        Console.WriteLine("#{0}# : Stop UnLoading", DateTime.Now.ToString("HH:mm:ss.fff"));
+                    }
+                }
+                else
+                {
+                    // Without Connection to OHTC
+                    Console.WriteLine("#{0}# {2} : Address {1} UnLoad Cmd-Sent Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address, loadStatus);
+                }
+
+                //
+                ////done = true;
+                #endregion          // "unload-arrival event"
+            }
+
+            return true;
+        }
+
+        //++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        //++++++++++++++++++++++++++++++++++++++++++++++++++++++           
+
+
+        protected void WaitForLoadUnLoading(LoadCommand enLoad)                         // Roy*180308 ... from WaitForLoading to WaitForLoadUnLoading
+        {
+            bool done = false;
+
+            Console.WriteLine("#{0}# : Enter '{1}' Procedure ... ", DateTime.Now.ToString("HH:mm:ss.fff"), enLoad.ToString());                    // Roy+180308
+
+            while (!done)
+            {
+                //
+                DDS_Global.motionInfo_HandShakeRecieveDataReader.Take(
+                    ref handShakeRxData,
+                    ref sampleInfo_RxData,
+                    DDS.SampleStateKind.Any,
+                    DDS.ViewStateKind.Any,
+                    DDS.InstanceStateKind.Any);
+
+                DDS_Global.motionInfo_HandShakeSendDataReader.Take(
+                    ref handShakeSendData,
+                    ref sampleInfo_SendData,
+                    DDS.SampleStateKind.Any,
+                    DDS.ViewStateKind.Any,
+                    DDS.InstanceStateKind.Any);
+                //
+
+                // Handshaking with OHT 
+                if (handShakeSendData != null)
+                {
+                    foreach (MotionInfo_HandShake_SendData data in handShakeSendData)
+                    {
+                        if (data.cmdReceive == 1)
+                        {
+                            Veh_OHTC_Global.blSendDataReceived = true;
+                            DDS_Global.motionInfoHandShakeTxData.cmdSend = 0;
+                            DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                            DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+                        }
+                        else
+                        {
+                            Veh_OHTC_Global.blSendDataReceived = false;
+                        }
+                    }
+                }
+
+                //
+                if (handShakeRxData != null)
+                {
+                    foreach (MotionInfo_HandShake_RecieveData data in handShakeRxData)
+                    {
+                        if (data.cmdSend == 1)
+                        {
+                            Veh_OHTC_Global.blRxDataSent = true;
+                            DDS_Global.motionInfoHandShakeRxData.cmdReceive = 1;
+                            DDS_Global.motionInfo_HandShakeRecieveDataWriter.Write(DDS_Global.motionInfoHandShakeRxData);
+                        }
+                        else
+                        {
+                            Veh_OHTC_Global.blRxDataSent = false;
+                        }
+                    }
+                }
+
+
+                //
+                if (Veh_OHTC_Global.blRxDataSent)
+                {
+                    DDS_Global.motionInfo_VehInterCommReptDataReader.Take(
+                            ref motionInfoInterCommReport,
+                            ref sampleInfo_RptData,
+                             DDS.SampleStateKind.Any, DDS.ViewStateKind.Any, DDS.InstanceStateKind.Any);
+
+                    if (motionInfoInterCommReport != null)
+                    {
+                        foreach (MotionInfo_Vehicle_Inter_Comm_ReportData data in motionInfoInterCommReport)
+                        {
+                            //Loading Status report 
+                            switch (data.eventTypes)
+                            {
+
+
+                                /*                          // Roy-180308
+                                case (int)VehEventTypes.Load_Arrived:
+                                    if (data.vehLoadStatus == (int)VehLoadedStatus.Existed)
+                                    {
+                                        if (data.vehActionStatus == (int)VehActionStatus.Load || data.vehActionStatus == (int)VehActionStatus.UnLoad)
+                                        {
+                                            if (!Veh_OHTC_Global.OffLineTest)
+                                            {
+                                                SendValuesForRept(data, "144");
+
+                                                if (!vehTcpComm.TcpIpTimeOut)
+                                                {
+                                                    Console.WriteLine("#{0}# Wait for Loading/Unloading : Load/UnLoadPort Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                                }
+                                                else
+                                                {
+                                                    Console.WriteLine("#{0}# Wait for Loading/Unloading : OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                                    Veh_TcpIpComm_TimeOutStop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                    Console.WriteLine("#{0}# Wait for Loading/Unloading : TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                                }
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# Wait for Loading/UnLoading : Load/UnLoadPort Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                            }
+                                        }
+                                    }
+
+                                    break;
+                                    */
+
+
+                                case (int)VehEventTypes.Load_Complete:
+                                    //Send Request to OHTC
+                                    Console.WriteLine("#{0}# Wait for Loading : Load Complete Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());                         // Roy*180308
+
+                                    //++++++++++++++++++++++++++                    // Roy+180308
+                                    if (enLoad != LoadCommand.Load)
+                                    {
+                                        System.Diagnostics.Debug.Assert(false);
+                                    }
+                                    //++++++++++++++++++++++++++
+
+                                    if ((data.cmpCode == (int)VehCompleteFlag.Finished) && (data.cmpStatus == (int)VehCompleteStatus.CmpAsNormal))
+                                    {
+                                        //
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            SendValuesForRept(data, "134");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# Wait for Loading : Load Complete Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());                         // Roy*180308
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# Wait for Loading/Unloading : OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());                         // Roy*180308
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# Wait for Loading : TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));                         // Roy*180308
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("#{0}# Wait for Loading : Load Complete Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());                         // Roy*180308
+                                        }
+
+                                        //
+                                        done = true;
+                                    }
+
+                                    break;
+
+
+                                case (int)VehEventTypes.Unload_Complete:
+                                    //Send Request to OHTC
+                                    Console.WriteLine("#{0}# Wait for Unloading : UnLoad Complete Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());                         // Roy*180308
+
+                                    //++++++++++++++++++++++++++                    // Roy+180308
+                                    if (enLoad == LoadCommand.Load)
+                                    {
+                                        System.Diagnostics.Debug.Assert(false);
+                                    }
+                                    //++++++++++++++++++++++++++
+
+                                    if ((data.cmpCode == (int)VehCompleteFlag.Finished) && (data.cmpStatus == (int)VehCompleteStatus.CmpAsNormal))
+                                    {
+                                        //
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            SendValuesForRept(data, "134");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# Wait for Unloading : UnLoad Complete Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());                         // Roy*180308
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# Wait for Unloading : OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());                         // Roy*180308
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# Wait for Unloading : TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));                         // Roy*180308
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("#{0}# Wait for UnLoading : UnLoad Complete Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());                         // Roy*180308
+                                        }
+
+                                        //
+                                        done = true;
+                                    }
+
+                                    break;
+
+                            }           // # switch (data.eventTypes)
+
+                            //prevAddress = data.Address;                           // Roy-180308
+                            //Wait for the Vehicle to arrive at the Load Port 
+                        }           // # foreach (MotionInfo_Vehicle_Inter_Comm_ReportData data in motionInfoInterCommReport)
+                    }           // # if (motionInfoInterCommReport != null)
+                }           // # if (Veh_OHTC_Global.blRxDataSent)
+
+                SpinWait.SpinUntil(() => false, 10);
+            }           // # while (!done)
+
+            Console.WriteLine("#{0}# : Exit '{1}' Procedure ... ", DateTime.Now.ToString("HH:mm:ss.fff"), enLoad.ToString());                    // Roy+180308
+        }
+
+
+        /*              // Roy-171128
+        protected bool Veh_UnLoad_Procedure()
+        {
+            try
+            {
+
+                return true;
+
+            }
+            catch (Exception ex)
+            {
+
+                return false;
+            }
+        }
+        */
+
+
+        /*                  // Roy-180319
+        protected bool Veh_Load_UnLoad_Procedure()
+        {
+            try
+            {
+                Veh_LoadUnLoad_Procedure(LoadCommand.Load, MoveType.single, Veh_OHTC_Global.GuideSections, Veh_OHTC_Global.CSTID_Load.ToString());              // Roy*180308 ... temp. 
+                Veh_LoadUnLoad_Procedure(LoadCommand.UnLoad, MoveType.single, Veh_OHTC_Global.GuideSections, Veh_OHTC_Global.CSTID_UnLoad.ToString());              // Roy*180308 ... temp. 
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("#{0}# Veh_Load/UnLoad Procedure: {0}", DateTime.Now.ToString("HH:mm:ss.fff"), ex.Message);               // Roy*171030
+                return false;
+            }
+        }
+        */
+
+
+        protected bool Veh_Move_Procedure(bool done, MoveType type, string[] sections)
+        {
+            try
+            {
+                //
+                DDS_Global.motionInfoInterCommSendData.udtMove.Sections = sections;
+                DDS_Global.motionInfoInterCommSendData.udtMove.Address = Veh_OHTC_Global.Address;
+
+                DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToMove;
+                DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = (int)MoveType.single;                //+++               // Roy+180319
+
+                DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = type;
+                DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.OK;
+                DDS_Global.motionInfoInterCommSendData.isStop = (int)Status.NG;
+                DDS_Global.motionInfoInterCommSendData.isPause = (int)Status.NG;
+                //
+                DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+                // Inform SendData Sent
+                DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+                DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+
+                //
+                motionInfoInterCommReport = null;
+                sampleInfo_RptData = null;
+                //
+                enJobDone = VehJobDone.No;
+
+                while (enJobDone == VehJobDone.No)
+                {
+                    //if (!Veh_OHTC_Global.blCycleRun) enJobDone = VehJobDone.Yes;
+                    DDS_Global.motionInfo_HandShakeRecieveDataReader.Take(
+                        ref handShakeRxData,
+                        ref sampleInfo_RxData,
+                        DDS.SampleStateKind.Any,
+                        DDS.ViewStateKind.Any,
+                        DDS.InstanceStateKind.Any);
+
+                    DDS_Global.motionInfo_HandShakeSendDataReader.Take(
+                        ref handShakeSendData,
+                        ref sampleInfo_SendData,
+                        DDS.SampleStateKind.Any,
+                        DDS.ViewStateKind.Any,
+                        DDS.InstanceStateKind.Any);
+
+                    if (handShakeSendData != null)
+                    {
+                        foreach (MotionInfo_HandShake_SendData data in handShakeSendData)
+                        {
+                            if (data.cmdReceive == 1)
+                            {
+                                Veh_OHTC_Global.blSendDataReceived = true;
+                                DDS_Global.motionInfoHandShakeTxData.cmdSend = 0;
+                                DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                                DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+                            }
+                            else
+                            {
+                                Veh_OHTC_Global.blSendDataReceived = false;
+                            }
+                        }
+                    }
+
+                    if (handShakeRxData != null)
+                    {
+                        foreach (MotionInfo_HandShake_RecieveData data in handShakeRxData)
+                        {
+                            if (data.cmdSend == 1)
+                            {
+                                Veh_OHTC_Global.blRxDataSent = true;
+                                DDS_Global.motionInfoHandShakeRxData.cmdReceive = 1;
+                                DDS_Global.motionInfo_HandShakeRecieveDataWriter.Write(DDS_Global.motionInfoHandShakeRxData);
+                            }
+                            else
+                            {
+                                Veh_OHTC_Global.blRxDataSent = false;
+                            }
+                        }
+                    }
+
+                    if (Veh_OHTC_Global.blRxDataSent)
+                    {
+                        DDS_Global.motionInfo_VehInterCommReptDataReader.Take(
+                                ref motionInfoInterCommReport,
+                                ref sampleInfo_RptData,
+                                 DDS.SampleStateKind.Any, DDS.ViewStateKind.Any, DDS.InstanceStateKind.Any);
+
+                        if (motionInfoInterCommReport != null)
+                        {
+                            foreach (MotionInfo_Vehicle_Inter_Comm_ReportData data in motionInfoInterCommReport)
+                            {
+                                //Transport report and Block Query
+                                #region Check Vehicle Motion Status for reportint to OHTC
+                                switch (data.eventTypes)
+                                {
+                                    case (int)VehEventTypes.Address_Pass:
+                                        Console.WriteLine("#{0}# Veh_Move_Procedure: Address {1} Passed.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());               // Roy*171030
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            // With Connection to OHTC
+                                            SendValuesForRept(data, "134");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: Address {1} Passed Sent.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // Without Connection to OHTC
+                                            Console.WriteLine("#{0}# Veh_Move_Procedure: Address {1} Passed.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.BlockSection_Query:                     // Roy*180319
+                                        //Send Request to OHTC
+                                        Console.WriteLine("\n#{0}# Veh_Move_Procedure: Send Block Query Address {1}", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());               // Roy*171030
+                                        //
+                                        Veh_OHTC_Global.BlockControlSection = data.BlockControlSection;                    // Roy+171128
+                                        Veh_OHTC_Global.queryBlockSection = data.Section;
+                                        Veh_OHTC_Global.queryVehAddres = data.Address;
+
+                                        // Send BlockQuery to OHTC if OffLineTest is false
+                                        if (!Veh_OHTC_Global.OffLineTest)           // w/wo Connection to OHTC
+                                        {
+                                            // With Connection to OHTC
+                                            SendValuesForRept(data, "134");
+
+                                            // waiting for OHTC reply 
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                //Internal Trigger
+                                                //OnEventBlockControlQuery(new BlockControlQueryArg(data.BlockPassReqst));
+                                                // OHTC Reply
+
+                                                if (Veh_OHTC_Global.blBlockCtrl)            // w/wo BlockOuery Option
+                                                {
+                                                    // With BlockControl option
+                                                    Console.WriteLine("#{0}# Veh_Move_Procedure: Block Query Wait for Reply", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+
+                                                    //OHTC signaled
+                                                    if (Veh_OHTC_Global.vehBlockPassReply == (int)Status.OK)
+                                                    {
+                                                        Veh_BlockControl_Move_Continue(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                        Console.WriteLine("#{0}# Veh_Move_Procedure: Block Query Move Grant-Pass\n", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                                    }
+                                                    else
+                                                    {
+                                                        Veh_BlockControl_Move_Stop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                        Console.WriteLine("#{0}# Veh_Move_Procedure: Block Query Stop Moving\n", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                                    }
+
+                                                }
+                                                else
+                                                {
+                                                    // No BlockControl option. Just Move 
+                                                    Veh_BlockControl_Move_Continue(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                    Console.WriteLine("#{0}# Veh_Move_Procedure: Block Query Move Grant-Pass\n", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                                }
+                                            }
+                                            else
+                                            {
+                                                //Raise Timeout Event
+                                                //Block Control Time out
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: Block Query Time Out", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: TimeOut Stop Moving\n", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            //Without connection to OHTC
+                                            // OffLineTest is true
+                                            if (Veh_OHTC_Global.vehBlockPassReply == (int)Status.OK)
+                                            {
+                                                Veh_BlockControl_Move_Continue(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: Block Query Move Grant-Pass\n", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                            }
+                                            else
+                                            {
+                                                Veh_BlockControl_Move_Stop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: Block Query Stop Moving\n", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030
+                                            }
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.Address_Arrival:
+                                        Console.WriteLine("#{0}# Veh_Move_Procedure: Address {1} Arrived", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());               // Roy*171030
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            SendValuesForRept(data, "134");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: Address {1} Arrived Sent.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("#{0}# Veh_Move_Procedure: Address {1} Arrived.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.Moving_Restart:
+                                        Console.WriteLine("#{0}# Veh_Move_Procedure: Moving Restarted at Address {1}", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());               // Roy*171030
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            SendValuesForRept(data, "144");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: Address {1} Moving Restarted.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("#{0}# Veh_Move_Procedure: Address {1} Moving Restarted.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                        }
+
+                                        break;
+
+                                    case (int)VehEventTypes.Moving_Pause:
+                                        Console.WriteLine("#{0}# Veh_Move_Procedure: Moveing Paused at address {1}", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());               // Roy*171030
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            SendValuesForRept(data, "144");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: Address {1} Moving Paused.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("#{0}# Veh_Move_Procedure: Address {1} Moving Paused.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                        }
+
+                                        break;
+
+
+                                    //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++                      // Roy+180308
+                                    case (int)VehEventTypes.Moving_Complete:                    // cycle不適用 ...
+                                        Console.WriteLine("#{0}# Veh_Move_Procedure: Moving Complete {1}", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+
+                                        if (!Veh_OHTC_Global.OffLineTest)
+                                        {
+                                            SendValuesForRept(data, "132");
+
+                                            if (!vehTcpComm.TcpIpTimeOut)
+                                            {
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: Address {1} Moving Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                            }
+                                            else
+                                            {
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                                Veh_TcpIpComm_TimeOutStop(MoveType.single);
+                                                Console.WriteLine("#{0}# Veh_Move_Procedure: TimeOut Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Console.WriteLine("#{0}# Veh_Move_Procedure: Address {1} Moving complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                        }
+
+                                        if (data.Address == DDS_Global.motionInfoInterCommSendData.udtMove.Address)                // Roy+180319
+                                        {
+                                            enJobDone = VehJobDone.Yes;                     //+++ 
+                                        }
+
+                                        break;
+                                    //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+                                }
+
+
+
+                                /*                              // Roy-180308
+                                prevAddress = data.Address;
+
+                                // Wait for the Vehicle to arrive at the entrance of cycle run route
+                                if ((data.cmpCode == (int)VehCompleteFlag.Finished) && (data.cmpStatus == (int)VehCompleteStatus.Normal))
+                                {
+                                    Veh_OHTC_Global.enActionType = Veh_OHTC_Global.ActionType.Move;                         // Roy*180308 ... from Cycle to Move 
+                                    DDS_Global.motionInfoInterCommSendData.Move.Type = MoveType.single;                         // Roy*180308 ... from cycle to single 
+                                    DDS_Global.motionInfoInterCommSendData.CmdType.cmdType = CmdType.Stop;
+                                    DDS_Global.motionInfoInterCommSendData.Move.Sections = sections;                    // Veh_OHTC_Global.GuideSections;                   // CycleSections                         // Roy*180308
+                                    //
+
+                                    if (!Veh_OHTC_Global.OffLineTest)
+                                    {
+                                        SendValuesForRept(data, "132");
+
+                                        if (!vehTcpComm.TcpIpTimeOut)
+                                        {
+                                            Console.WriteLine("#{0}# Veh_Move_Procedure: Address {1} Moving Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                        }
+                                        else
+                                        {
+                                            Veh_TcpIpComm_TimeOutStop(MoveType.single);                         // Roy*180308 ... from cycle to single 
+                                            Console.WriteLine("#{0}# Veh_Move_Procedure: Stop Moving", DateTime.Now.ToString("HH:mm:ss.fff"));
+                                            Console.WriteLine("#{0}# Veh_Move_Procedure: OHTC Connection TimeOut.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                        }
+                                    }
+                                    else
+                                    {
+                                        Console.WriteLine("#{0}# Veh_Move_Procedure: Address {1} Moving Complete.", DateTime.Now.ToString("HH:mm:ss.fff"), data.Address.ToString());
+                                    }
+                                    //
+
+                                    enJobDone = VehJobDone.Yes;
+                                    //Console.WriteLine("#{0}# Veh_Move_Procedure: Vehicle Exit Cycle Run", DateTime.Now.ToString("HH:mm:ss.fff"));               // Roy*171030                 // Roy-180308
+                                }
+                                */
+
+                                #endregion
+                            }           // # foreach (MotionInfo_Vehicle_Inter_Comm_ReportData data in motionInfoInterCommReport)
+                        }           // # if (motionInfoInterCommReport != null)
+                    }           // # if (Veh_OHTC_Global.blRxDataSent)
+
+                    SpinWait.SpinUntil(() => false, 10);
+                }           // # while (enJobDone == VehJobDone.No)
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return false;
+            }
+        }
+
+
+        //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++                   // Roy+180319
+        protected bool Veh_Cancel_Procedure()
+        {
+            try
+            {
+                // Send the Guiding sections
+                ////DDS_Global.motionInfoInterCommSendData.Move.Sections = Veh_OHTC_Global.GuideSections;              
+                ////DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.Section = "";                 // Veh_OHTC_Global.querySection;       
+                DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToCancel;
+                //DDS_Global.motionInfoInterCommSendData.Move.Type = MoveType.single;            
+
+                DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.OK;
+                DDS_Global.motionInfoInterCommSendData.isStop = (int)StopStatus.StopYes;
+                DDS_Global.motionInfoInterCommSendData.isPause = (int)PauseStatus.PauseYes;
+                DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+                // Inform SendData Sent
+                DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+                DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return false;
+            }
+        }
+
+        protected bool Veh_Abort_Procedure()
+        {
+            try
+            {
+                // Send the Guiding sections
+                ////DDS_Global.motionInfoInterCommSendData.Move.Sections = Veh_OHTC_Global.GuideSections;              
+                ////DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.Section = "";                 // Veh_OHTC_Global.querySection;       
+                DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToAbort;
+                //DDS_Global.motionInfoInterCommSendData.Move.Type = MoveType.single;            
+
+                DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.OK;
+                DDS_Global.motionInfoInterCommSendData.isStop = (int)StopStatus.StopYes;
+                DDS_Global.motionInfoInterCommSendData.isPause = (int)PauseStatus.PauseYes;
+                DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+                // Inform SendData Sent
+                DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+                DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return false;
+            }
+        }
+        //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+        protected bool Veh_Pause_Procedure()
+        {
+            try
+            {
+                // Send the Guiding sections
+                //DDS_Global.motionInfoInterCommSendData.Move.Sections = Veh_OHTC_Global.GuideSections;                 // Roy-180319
+                //DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.Section = "";                 // Veh_OHTC_Global.querySection;                     // Roy-*180319
+                DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToPause;             // CmdType.Stop;                  // Roy*180302
+                //DDS_Global.motionInfoInterCommSendData.Move.Type = MoveType.single;                 // Roy-180319
+
+                DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.OK;
+                DDS_Global.motionInfoInterCommSendData.isStop = (int)StopStatus.StopYes;
+                DDS_Global.motionInfoInterCommSendData.isPause = (int)PauseStatus.PauseYes;
+                DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+                // Inform SendData Sent
+                DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+                DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return false;
+            }
+        }
+
+
+        //+++++++++++++++++++++++++++++++++++++++++++++
+        //+++++++++++++++++++++++++++++++++++++++++++++                 // Roy+180302
+        protected bool Veh_Stop_Procedure()
+        {
+            try
+            {
+                // Send the Guiding sections
+                DDS_Global.motionInfoInterCommSendData.udtMove.Sections = Veh_OHTC_Global.GuideSections;
+                DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.Section = "";                 // Veh_OHTC_Global.querySection;                     // Roy*180319
+                DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToStop;
+                DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = MoveType.cycle;             // MoveType.single;
+                DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.NG;               // (int)Status.OK;
+                DDS_Global.motionInfoInterCommSendData.isStop = (int)StopStatus.StopYes;
+                DDS_Global.motionInfoInterCommSendData.isPause = (int)PauseStatus.PauseYes;
+                DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+                // Inform SendData Sent
+                DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+                DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+                DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return false;
+            }
+        }
+        //+++++++++++++++++++++++++++++++++++++++++++++
+        //+++++++++++++++++++++++++++++++++++++++++++++
+
+
+        protected void SendValuesForRept(MotionInfo_Vehicle_Inter_Comm_ReportData reptData, string sCmd)
+        {
+
+            Veh_OHTC_Global.Address = reptData.Address;
+            Veh_OHTC_Global.Section = reptData.Section;
+            Veh_OHTC_Global.BlockControlSection = reptData.BlockControlSection;
+            Veh_OHTC_Global.cmpCode = reptData.cmpCode;
+            Veh_OHTC_Global.cmpStatus = reptData.cmpStatus;
+            Veh_OHTC_Global.DistanceFromSectionStart = reptData.DistanceFromSectionStart;
+            Veh_OHTC_Global.vehLeftGuideLockStatus = reptData.vehLeftGuideLockStatus;
+            Veh_OHTC_Global.vehRightGuideLockStatus = reptData.vehRightGuideLockStatus;
+            Veh_OHTC_Global.vehModeStatus = reptData.vehModeStatus;
+            Veh_OHTC_Global.vehLoadStatus = reptData.vehLoadStatus;
+            Veh_OHTC_Global.vehPauseStatus = reptData.vehPauseStatus;
+            Veh_OHTC_Global.eventTypes = reptData.eventTypes;
+            Veh_OHTC_Global.vehBlockStopStatus = reptData.vehBlockStopStatus;
+            Veh_OHTC_Global.vehObstStopStatus = reptData.vehObstacleStopStatus;
+            Veh_OHTC_Global.vehObstDist = reptData.vehObstDist;
+            Veh_OHTC_Global.vehModeStatus = reptData.vehModeStatus;
+            Veh_OHTC_Global.CSTID_Load = reptData.loadStatus.CSTID;
+            Veh_OHTC_Global.CSTID_UnLoad = reptData.unLoadStatus.CSTID;
+            Veh_OHTC_Global.vehActionStatus = reptData.vehActionStatus;
+
+            #region Conversion between EventTypes, CmpCode,..
+            EventTypeConv(Veh_OHTC_Global.eventTypes, ref eventTypes);
+            CompleteStatusConv(Veh_OHTC_Global.cmpStatus, ref cmpStatus);
+            GuideStatusConv(Veh_OHTC_Global.vehLeftGuideLockStatus, ref lGuideStatus);
+            GuideStatusConv(Veh_OHTC_Global.vehRightGuideLockStatus, ref rGuideStatus);
+            StopStatusConv(Veh_OHTC_Global.vehBlockStopStatus, ref blockStatus);
+            StopStatusConv(Veh_OHTC_Global.vehObstStopStatus, ref obstStatus);
+            StopStatusConv(Veh_OHTC_Global.vehPauseStatus, ref pauseStatus);
+            LoadStatusConv(Veh_OHTC_Global.vehLoadStatus, ref loadStatus);
+            ModeStatusConv(Veh_OHTC_Global.vehModeStatus, ref modeStatus);
+            ActionStatusConv(Veh_OHTC_Global.vehActionStatus, ref actionStatus);
+            #endregion
+
+            // Send Data to OHTC
+            //
+            string id;
+            string msg = string.Empty;
+
+            switch (sCmd)
+            {
+                case "134":
+                    if (!Veh_OHTC_Global.OffLineTest)
+                    {
+                        Veh_OHTC_Global.vehOHTComm.sned_Str134("ID_134", eventTypes, Veh_OHTC_Global.Section,
+                            Veh_OHTC_Global.Address, Veh_OHTC_Global.BlockControlSection,
+                            lGuideStatus, rGuideStatus, blockStatus, pauseStatus, obstStatus, loadStatus,
+                            Veh_OHTC_Global.DistanceFromSectionStart);
+                    }
+
+                    GetReptMsg("134", ref msg);
+                    OnEventMsgToOHTC(new ReportMsgEventArg(msg));
+
+                    break;
+
+                case "144":
+                    if (!Veh_OHTC_Global.OffLineTest)
+                    {
+                        Veh_OHTC_Global.vehOHTComm.sned_Str144("ID_144",
+                            Veh_OHTC_Global.Section, Veh_OHTC_Global.Address,
+                            modeStatus, actionStatus, powerStatus, loadStatus, obstStatus, blockStatus,
+                            pauseStatus, lGuideStatus, rGuideStatus,
+                            (int)Veh_OHTC_Global.DistanceFromSectionStart);
+                    }
+
+                    GetReptMsg("144", ref msg);
+                    OnEventMsgToOHTC(new ReportMsgEventArg(msg));
+
+                    break;
+
+                case "132":
+                    if (!Veh_OHTC_Global.OffLineTest)
+                    {
+                        Veh_OHTC_Global.vehOHTComm.sned_Str132(
+                            "ID_132",
+                            activeType,
+                            Veh_OHTC_Global.CSTID_Load.ToString(),
+                            Veh_OHTC_Global.cmpCode,
+                            cmpStatus);
+                    }
+
+                    GetReptMsg("132", ref msg);
+                    OnEventMsgToOHTC(new ReportMsgEventArg(msg));
+
+                    break;
+            }
+        }
+
+
+        //+++++++++++++++++++++++++++++++++++++++                   // Roy+180319
+        protected void Veh_Restart_Procedure()
+        {
+            DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToRestart;
+            //DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.BlockSectionPassReply = Status.OK;               
+            //DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.Section = "";                 // DDS_Global.motionInfoInterCommReptData.BlockSectionPassReqst.Section;                     // Roy-*180319
+
+            DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.OK;
+            DDS_Global.motionInfoInterCommSendData.isStop = (int)Status.NG;
+            DDS_Global.motionInfoInterCommSendData.isPause = (int)Status.NG;
+            DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+            // Inform SendData Sent
+            DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+            DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+            DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+        }
+        //+++++++++++++++++++++++++++++++++++++++        
+
+
+        protected void Veh_Continue_Procedure()
+        {
+            DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToContinue;
+            DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.BlockSectionPassReply = Status.OK;                     // Roy*180319
+            DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.Section = DDS_Global.motionInfoInterCommReptData.BlockSectionPassReqst.Section;                     // Roy*180319
+
+            DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.OK;
+            DDS_Global.motionInfoInterCommSendData.isStop = (int)Status.NG;
+            DDS_Global.motionInfoInterCommSendData.isPause = (int)Status.NG;
+            DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+            // Inform SendData Sent
+            DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+            DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+            DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+        }
+
+
+        //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++              // Roy+180319
+        protected void Veh_HIDControl_Move_Continue(MoveType mType)
+        {
+            // Send Continue Message to Vehicle
+            DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToHIDSectionQueryResult;            
+            DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = mType;
+
+            DDS_Global.motionInfoInterCommSendData.HIDSectionPassReply.Section = Veh_OHTC_Global.HIDControlSection;          
+
+            DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.OK;
+            DDS_Global.motionInfoInterCommSendData.HIDSectionPassReply.HIDSectionPassReply = Status.OK;          
+            DDS_Global.motionInfoInterCommSendData.isStop = (int)StopStatus.StopNo;
+            DDS_Global.motionInfoInterCommSendData.isPause = (int)PauseStatus.PauseNo;
+            DDS_Global.motionInfoInterCommSendData.HIDControlTimeOut = false;
+            DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+            // Inform SendData Sent
+            DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+            DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+            DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+            //
+        }
+
+        protected void Veh_HIDControl_Move_Stop(MoveType mType)
+        {
+            // Send Pause Message to Vehicle
+            DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToHIDSectionQueryResult;   
+            DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = mType;
+            DDS_Global.motionInfoInterCommSendData.HIDSectionPassReply.Section = Veh_OHTC_Global.queryHIDSection;    
+
+            DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.NG;
+            DDS_Global.motionInfoInterCommSendData.isStop = (int)StopStatus.StopYes;
+            DDS_Global.motionInfoInterCommSendData.isPause = (int)PauseStatus.PauseYes;
+            DDS_Global.motionInfoInterCommSendData.HIDControlTimeOut = false;
+            DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+            // Inform SendData Sent
+            DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+            DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+            DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+            //
+        }
+        //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+        protected void Veh_BlockControl_Move_Continue(MoveType mType)
+        {
+            // Send Continue Message to Vehicle
+            DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToBlockSectionQueryResult;                     // Roy*180319
+            DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = mType;
+
+            //DDS_Global.motionInfoInterCommSendData.BlockPassReply.Section = Veh_OHTC_Global.querySection;                           // Roy-171002
+            DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.Section = Veh_OHTC_Global.BlockControlSection;                   // Roy+171002                     // Roy*180319
+
+            DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.OK;
+            DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.BlockSectionPassReply = Status.OK;                     // Roy*180319
+            DDS_Global.motionInfoInterCommSendData.isStop = (int)StopStatus.StopNo;
+            DDS_Global.motionInfoInterCommSendData.isPause = (int)PauseStatus.PauseNo;
+            DDS_Global.motionInfoInterCommSendData.BlockControlTimeOut = false;
+            DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+            // Inform SendData Sent
+            DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+            DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+            DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+            //
+        }
+
+        protected void Veh_BlockControl_Move_Stop(MoveType mType)
+        {
+            // Send Pause Message to Vehicle
+            DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToBlockSectionQueryResult;                     // Roy*180319
+            DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = mType;
+            DDS_Global.motionInfoInterCommSendData.BlockSectionPassReply.Section = Veh_OHTC_Global.queryBlockSection;                     // Roy*180319
+
+            DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.NG;
+            DDS_Global.motionInfoInterCommSendData.isStop = (int)StopStatus.StopYes;
+            DDS_Global.motionInfoInterCommSendData.isPause = (int)PauseStatus.PauseYes;
+            DDS_Global.motionInfoInterCommSendData.BlockControlTimeOut = false;
+            DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+            // Inform SendData Sent
+            DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+            DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+            DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+            //
+        }
+
+
+        protected void Veh_TcpIpComm_TimeOutStop(MoveType mType)
+        {
+            // Send Pause Message to Vehicle
+            DDS_Global.motionInfoInterCommSendData.udtCmdType.eCmdType = CmdType.CmdToStop;
+            DDS_Global.motionInfoInterCommSendData.udtMove.eMoveType = mType;
+            DDS_Global.motionInfoInterCommSendData.isContinue = (int)Status.NG;
+            DDS_Global.motionInfoInterCommSendData.isStop = (int)StopStatus.StopYes;
+            DDS_Global.motionInfoInterCommSendData.isPause = (int)PauseStatus.PauseYes;
+            DDS_Global.motionInfoInterCommSendData.BlockControlTimeOut = true;
+            DDS_Global.motionInfo_VehInterCommSendDataWriter.Write(DDS_Global.motionInfoInterCommSendData);
+
+            // Inform SendData Sent
+            DDS_Global.motionInfoHandShakeTxData.cmdSend = 1;
+            DDS_Global.motionInfoHandShakeTxData.cmdReceive = 0;
+            DDS_Global.motionInfo_HandShakeSendDataWriter.Write(DDS_Global.motionInfoHandShakeTxData);
+            //
+        }
+
+
+        protected void GetReptMsg(string id, ref string msg)
+        {
+
+            msg = string.Format(
+                    @"Cmd_ID: {0},
+                    Event Type: {1},
+                    Current Section: {2},
+                    Current Address: {3},
+                    BlockCtrl Section: {4},
+                    Left Guide Status: {5},
+                    Right Guide Status: {6},
+                    Block Status: {7},
+                    Pause Status : {8},
+                    Obstacle Stop Status: {9},
+                    Load Cst Status: {10},
+                    Distance From Section Start: {11}",
+                    id, eventTypes.ToString(),
+                    Veh_OHTC_Global.Section, Veh_OHTC_Global.Address, Veh_OHTC_Global.BlockControlSection,
+                    lGuideStatus.ToString(), rGuideStatus.ToString(), blockStatus.ToString(),
+                    pauseStatus.ToString(), obstStatus.ToString(), loadStatus.ToString(),
+                    Veh_OHTC_Global.DistanceFromSectionStart.ToString());
+        }
+
+        #region Report Type Conversion
+        protected void EventTypeConv(int type, ref EventType eType)
+        {
+            switch (type)
+            {
+                case 0:
+                    eType = EventType.LoadArrivals;
+                    break;
+
+                case 1:
+                    eType = EventType.LoadComplete;
+                    break;
+
+                case 2:
+                    eType = EventType.UnloadArrivals;
+                    break;
+
+                case 3:
+                    eType = EventType.UnloadComplete;
+                    break;
+
+                //case 4:   //jason-- 180829
+                //    eType = EventType.AdrArrivals;                  //.MovePause;                   // Roy*171128
+                //    break;
+                case 4:     //jason++ 180829
+                    eType = EventType.AdrOrMoveArrivals;                  //.MovePause;                   // Roy*171128
+                    break;
+                case 5:
+                    eType = EventType.AdrPass;
+                    break;
+
+                case 6:
+                    eType = EventType.MovePause;
+                    break;
+
+                case 7:
+                    eType = EventType.MoveRestart;
+                    break;
+
+                case 8:
+                    eType = EventType.BlockReq;
+                    break;
+            }
+        }
+
+
+        protected void CompleteStatusConv(int status, ref CompleteStatus cStatus)
+        {
+            switch (status)
+            {
+                case 0:
+                    cStatus = CompleteStatus.Normal;
+                    break;
+
+                //case 1:   jason-- 180829
+                //    cStatus = CompleteStatus.Override;
+                //    break;
+
+                //case 2:
+                //    cStatus = CompleteStatus.Cancel;
+                //    break;
+
+                //case 3:
+                //    cStatus = CompleteStatus.Abort;
+                //    break;
+                case 1:
+                    cStatus = CompleteStatus.Cancel;
+                    break;
+                case 2:
+                    cStatus = CompleteStatus.Abort;
+                    break;
+                case 11:
+                    cStatus = CompleteStatus.VhCancel;
+                    break;
+                case 12:
+                    cStatus = CompleteStatus.VhAbort;
+                    break;
+            }
+        }
+
+
+        protected void ActiveTypeConv(int type, ref ActiveType aType)
+        {
+            switch (type)
+            {
+                case 0:
+                    aType = ActiveType.Move;
+                    break;
+
+                case 1:
+                    aType = ActiveType.Load;
+                    break;
+
+                case 2:
+                    aType = ActiveType.Unload;
+                    break;
+
+                case 3:
+                    aType = ActiveType.Loadunload;
+                    break;
+
+                //case 4:   //jason-- 180829
+                //    aType = ActiveType.Teaching;
+                //    break;
+
+                case 4:     //jason++ 180829
+                    aType = ActiveType.Home;
+                    break;
+
+                case 6:    //jason++ 180829 5-- 6++
+                    aType = ActiveType.Round;
+                    break;
+            }
+        }
+
+
+        protected void LoadStatusConv(int status, ref VhLoadCSTStatus lStatus)
+        {
+            switch (status)
+            {
+                case 0:
+                    lStatus = VhLoadCSTStatus.NotExist;
+                    break;
+
+                case 1:
+                    lStatus = VhLoadCSTStatus.Exist;
+                    break;
+            }
+        }
+
+
+        protected void StopStatusConv(int status, ref VhStopSingle stopStatus)
+        {
+            switch (status)
+            {
+                case 0:
+                    stopStatus = VhStopSingle.StopSingleOff;
+                    break;
+
+                case 1:
+                    stopStatus = VhStopSingle.StopSingleOn;
+                    break;
+            }
+        }
+
+
+        protected void GuideStatusConv(int status, ref VhGuideStatus gStatus)
+        {
+            switch (status)
+            {
+                case 0:
+                    gStatus = VhGuideStatus.Unlock;
+                    break;
+
+                case 1:
+                    gStatus = VhGuideStatus.Lock;
+                    break;
+            }
+        }
+
+
+        protected void ModeStatusConv(int status, ref VHModeStatus mstatus)
+        {
+            switch (status)
+            {
+                //case 0:       //jason-- 180829
+                //    mstatus = VHModeStatus.Auto;
+                //    break;
+                case 0:         //jason++ 180829
+                    mstatus = VHModeStatus.None;
+                    break;
+
+                case 1:
+                    mstatus = VHModeStatus.InitialPowerOff;
+                    break;
+
+                case 2:
+                    mstatus = VHModeStatus.InitialPowerOn;
+                    break;
+
+                case 3:
+                    mstatus = VHModeStatus.Manual;
+                    break;
+
+                //case 4:       //jason-- 180829
+                //    mstatus = VHModeStatus.None;
+                //    break;
+                case 4:         //jason++ 180829
+                    mstatus = VHModeStatus.AutoLocal;   //Local? Remote?
+                    break;
+            }
+        }
+
+
+        protected void ActionStatusConv(int status, ref VHActionStatus actStatus)
+        {
+            switch (status)
+            {
+                //case 0:       //jason-- 180829
+                //    actStatus = VHActionStatus.Stop;
+                //    break;
+
+                //case 1:
+                //    actStatus = VHActionStatus.Move;
+                //    break;
+
+                //case 2:
+                //    actStatus = VHActionStatus.Loading;
+                //    break;
+
+                //case 3:
+                //    actStatus = VHActionStatus.Unloading;
+                //    break;
+                case 0:     //jason++ 180829
+                    actStatus = VHActionStatus.NonAction;
+                    break;
+
+                case 1:
+                    actStatus = VHActionStatus.Action;
+                    break;
+
+                case 2:
+                    actStatus = VHActionStatus.Home;
+                    break;
+
+                case 3:
+                    actStatus = VHActionStatus.Teaching;
+                    break;
+
+                //case 4:   //jason-- 180829
+                //    actStatus = VHActionStatus.Home;
+                //    break;
+                case 4:     //jason++ 180829
+                    actStatus = VHActionStatus.GripperTeaching;
+                    break;
+
+                //case 5:       //jason-- 180829
+                //    actStatus = VHActionStatus.Teaching;
+                //    break;
+                case 5:     //jason++ 180829
+                    actStatus = VHActionStatus.CycleRun;
+                    break;
+
+                //case 6:       //jason-- 180829
+                //    actStatus = VHActionStatus.GripperTeaching;
+                //    break;
+
+                //case 7:
+                //    actStatus = VHActionStatus.CycleRun;
+                //    break;
+            }
+        }
+        #endregion
+
+        #region Event Raiser
+
+        public void OnEventBlockControlQuery(BlockControlQueryArg e)
+        {
+            if (eventBlockQuery != null)
+            {
+                eventBlockQuery(this, e);
+            }
+        }
+        public void OnEventMsgToOHTC(ReportMsgEventArg e)
+        {
+            if (eventMsgToOHTC != null)
+            {
+                eventMsgToOHTC(this, e);
+            }
+        }
+        #endregion
+
+    }
+
+
+    public class MessageEventArg : EventArgs
+    {
+        WrapperMessage wMessage = new WrapperMessage();
+        WrapperMessage.MsgOneofCase _Case;
+        Veh_OHTC_Global.SequenceEvents _seqEvents;
+
+        public MessageEventArg()
+        {
+            _Case = wMessage.MsgCase;
+
+        }
+
+        public WrapperMessage.MsgOneofCase enCase
+        { get { return _Case; } }
+    }
+
+
+    public class ReportMsgEventArg : EventArgs
+    {
+        public string Msg { get; set; }
+
+        public ReportMsgEventArg(string msg)
+        {
+            Msg = msg;
+        }
+
+    }
+
+
+    public class BlockControlQueryArg : EventArgs               // Roy*180319
+    {
+
+        public MotionInfo_BlockSectionPassReqst Query { get; set; }
+
+        public BlockControlQueryArg(MotionInfo_BlockSectionPassReqst query)
+        {
+            Query = query;
+        }
+
+        public MotionInfo_BlockSectionPassReply Reply { get; set; }
+
+        public BlockControlQueryArg(MotionInfo_BlockSectionPassReply reply)
+        {
+            Reply = reply;
+        }
+
+    }
+
+}
